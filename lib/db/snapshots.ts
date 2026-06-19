@@ -40,3 +40,22 @@ export function getPriceHistory(
     )
     .all(itemName, platform) as IPriceSnapshot[];
 }
+
+// 同一个饰品在各平台最新的一条价格快照，每个 platform 只取 captured_at 最大的那条，
+// 用于跨平台价差计算。
+export function getLatestPricesByPlatform(itemName: string): IPriceSnapshot[] {
+  return getDb()
+    .prepare(
+      `SELECT ps.* FROM price_snapshots ps
+       JOIN (
+         SELECT platform, MAX(captured_at) AS max_captured_at
+         FROM price_snapshots
+         WHERE item_name = ?
+         GROUP BY platform
+       ) latest
+         ON ps.platform = latest.platform
+        AND ps.captured_at = latest.max_captured_at
+       WHERE ps.item_name = ?`
+    )
+    .all(itemName, itemName) as IPriceSnapshot[];
+}
