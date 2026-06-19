@@ -120,7 +120,7 @@ C5_API_BASE_URL=https://openapi.c5game.com
 
 # SteamDT
 STEAMDT_APP_KEY=
-STEAMDT_API_BASE_URL=https://openapi.steamdt.com
+STEAMDT_API_BASE_URL=https://open.steamdt.com
 
 # NVIDIA NIM（免费 LLM）
 NVIDIA_API_KEY=
