@@ -153,11 +153,11 @@ refactor(ui): 拆分 InventoryTable 为子组件
 ## 开发优先级（按顺序）
 
 1. **Phase 1 — 数据库基础**
-   - [ ] 项目初始化（Next.js + TypeScript + Tailwind）
-   - [ ] 数据库 schema（inventory、price_snapshots、watchlist）
-   - [ ] SteamDT API 封装（K线、报价接口）
-   - [ ] C5 API 封装（库存、订单接口）
-   - [ ] 数据刷新策略：确定是手动触发 API 路由拉取，还是用定时任务（cron / Vercel Cron）自动拉取 K线/订单簿数据，并在此明确写入文档
+   - [x] 项目初始化（Next.js + TypeScript + Tailwind）
+   - [x] 数据库 schema（inventory、price_snapshots、watchlist）
+   - [x] SteamDT API 封装（单品价格、批量价格、K线、7天均价）
+   - [x] C5 API 封装（库存列表、卖家订单列表、价格查询）
+   - [x] 数据刷新策略：手动触发 `POST /api/sync`，遍历持仓+观察池里的饰品拉取价格并写入 price_snapshots
 
 2. **Phase 2 — 信号与规则**
    - [ ] 技术指标计算（MA7/30、RSI14、成交量异常）
