@@ -2,6 +2,7 @@ import type {
   ISteamDTAvgPrice,
   ISteamDTBatchPriceItem,
   ISteamDTEnvelope,
+  ISteamDTKlinePoint,
   ISteamDTPlatformPrice,
 } from "../types";
 
@@ -32,7 +33,8 @@ async function steamDtRequest<T>(
     const res = await fetch(url, {
       method: options.method ?? "GET",
       headers: {
-        "app-key": APP_KEY,
+        // 实测确认鉴权要用 Authorization: Bearer <key>，header 名不是 app-key（跟文档描述不一致）。
+        Authorization: `Bearer ${APP_KEY}`,
         ...(options.body ? { "Content-Type": "application/json" } : {}),
       },
       body: options.body ? JSON.stringify(options.body) : undefined,
@@ -78,7 +80,6 @@ export async function getBatchPrice(
 // 文档目前只确认 type=1（日线），其他取值未知。
 export type ISteamDTKlineType = 1;
 
-// K线返回的二维数组每行的列含义文档没有列出，拿到真实响应后需要补一个解析函数把列映射成具名字段。
 export async function getKline(
   marketHashName: string,
   options: {
@@ -86,8 +87,8 @@ export async function getKline(
     platform?: string;
     specialStyle?: string;
   } = {}
-): Promise<ISteamDtResult<number[][]>> {
-  return steamDtRequest<number[][]>("/open/cs2/item/v1/kline", {
+): Promise<ISteamDtResult<ISteamDTKlinePoint[]>> {
+  return steamDtRequest<ISteamDTKlinePoint[]>("/open/cs2/item/v1/kline", {
     method: "POST",
     body: {
       marketHashName,

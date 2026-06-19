@@ -64,8 +64,34 @@ export interface IC5SellerOrder {
   };
 }
 
-// 价格查询响应字段未在文档里完整列出，目前只确认有 price，
-// 其余字段先按 unknown 处理，等拿到真实响应再补全。
+// C5 响应统一是 {success, data, errorCode, errorMsg, errorData, errorCodeStr} 包装层（实测确认）。
+export interface IC5Envelope<T> {
+  success: boolean;
+  data: T;
+  errorCode: number | string;
+  errorMsg: string | null;
+  errorData: unknown;
+  errorCodeStr: string | null;
+}
+
+export interface IC5InventoryListData {
+  steamId: string;
+  appId: number;
+  total: number;
+  lastAssetId: number | string | null;
+  list: IC5InventoryItem[];
+}
+
+export interface IC5SellerOrderListData {
+  total: number;
+  pages: number;
+  page: number;
+  limit: number;
+  list: IC5SellerOrder[];
+}
+
+// 价格查询接口的真实 path 还没确认（文档里给的 /open/product/price 实测 404），
+// 响应字段先按 price 占位，等路径确认后再补全。
 export interface IC5PriceQuery {
   price: number;
   [key: string]: unknown;
@@ -82,24 +108,18 @@ export interface ISteamDTEnvelope<T> {
 
 export interface ISteamDTPlatformPrice {
   platform: string;
+  platformItemId: string;
   sellPrice: number;
   sellCount: number;
   biddingPrice: number;
   biddingCount: number;
-  updateTime: string;
+  updateTime: number; // Unix 秒级时间戳，不是字符串（实测确认，文档没写清楚）
 }
 
-export interface ISteamDTBatchPlatformPrice {
-  platform: string;
-  sellPrice: number;
-  sellCount: number;
-  biddingPrice: number;
-  biddingCount: number;
-}
-
+// 实测确认 batch 接口的 dataList 跟单品价格接口字段一样（文档里少写了 platformItemId/updateTime）。
 export interface ISteamDTBatchPriceItem {
   marketHashName: string;
-  dataList: ISteamDTBatchPlatformPrice[];
+  dataList: ISteamDTPlatformPrice[];
 }
 
 export interface ISteamDTAvgPriceEntry {
@@ -112,3 +132,6 @@ export interface ISteamDTAvgPrice {
   avgPrice: number;
   dataList: ISteamDTAvgPriceEntry[];
 }
+
+// K线每行实测是 [时间戳字符串, open, high, low, close]，没有成交量字段，时间戳是字符串不是数字。
+export type ISteamDTKlinePoint = [string, number, number, number, number];

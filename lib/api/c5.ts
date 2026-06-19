@@ -1,5 +1,10 @@
 import { TokenBucket } from "./rate-limiter";
-import type { IC5InventoryItem, IC5PriceQuery, IC5SellerOrder } from "../types";
+import type {
+  IC5Envelope,
+  IC5InventoryListData,
+  IC5PriceQuery,
+  IC5SellerOrderListData,
+} from "../types";
 
 const BASE_URL = process.env.C5_API_BASE_URL ?? "https://openapi.c5game.com";
 const APP_KEY = process.env.C5_APP_KEY ?? "";
@@ -34,10 +39,14 @@ async function c5Request<T>(
     if (!res.ok) {
       return { data: null, error: `C5 ${path} 返回 HTTP ${res.status}` };
     }
-    // C5 响应是否有 code/msg 包装层，文档片段里没确认，这里先把响应体当作 data 本体解析；
-    // 等接到真实响应后如果发现有包装层，再在这里加一层解包。
-    const json = (await res.json()) as T;
-    return { data: json };
+    const json = (await res.json()) as IC5Envelope<T>;
+    if (!json.success) {
+      return {
+        data: null,
+        error: `C5 ${path} 返回错误 ${json.errorCode}: ${json.errorMsg}`,
+      };
+    }
+    return { data: json.data };
   } catch (err) {
     return {
       data: null,
@@ -50,8 +59,8 @@ export async function getInventoryList(
   steamId: string,
   appId: number,
   options: { startAssetId?: number; count?: number; language?: string } = {}
-): Promise<IC5Result<IC5InventoryItem[]>> {
-  return c5Request<IC5InventoryItem[]>(
+): Promise<IC5Result<IC5InventoryListData>> {
+  return c5Request<IC5InventoryListData>(
     `/merchant/inventory/v2/${encodeURIComponent(steamId)}/${appId}`,
     {
       language: options.language ?? "zh",
@@ -65,8 +74,8 @@ export async function getInventoryList(
 export async function getSellerOrderList(
   steamId: string,
   options: { appId?: number; status?: number; page?: number; limit?: number } = {}
-): Promise<IC5Result<IC5SellerOrder[]>> {
-  return c5Request<IC5SellerOrder[]>("/merchant/order/v1/list", {
+): Promise<IC5Result<IC5SellerOrderListData>> {
+  return c5Request<IC5SellerOrderListData>("/merchant/order/v1/list", {
     steamId,
     appId: options.appId ?? 730,
     status: options.status ?? 1,
@@ -75,6 +84,7 @@ export async function getSellerOrderList(
   });
 }
 
+// path 还没确认（文档给的 /open/product/price 实测 404），先保留函数签名，等确认路径后再改实现。
 export async function getProductPrice(
   marketHashName: string
 ): Promise<IC5Result<IC5PriceQuery>> {
