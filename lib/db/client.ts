@@ -8,7 +8,6 @@ const MIGRATIONS_DIR = path.join(process.cwd(), "db", "migrations");
 // Next.js dev 模式热重载会重新执行模块顶层代码，
 // 用 globalThis 持有连接，避免每次热重载都新开一个 sqlite 连接导致 database is locked。
 declare global {
-  // eslint-disable-next-line no-var
   var __db: Database.Database | undefined;
 }
 

@@ -13,7 +13,9 @@ export interface IInventoryItem {
 export interface IPriceSnapshot {
   id: number;
   item_name: string;
-  platform: "steamdt" | "c5";
+  // SteamDT 单品价格接口返回的是聚合后的具体交易平台代码（如 BUFF/YOUPIN/STEAM），
+  // 直连 C5 价格接口时固定写 'c5'，所以这里用 string 而不是字面量联合类型。
+  platform: string;
   price: number;
   volume: number | null;
   captured_at: string;
