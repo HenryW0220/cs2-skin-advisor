@@ -5,6 +5,7 @@ import { movingAverage } from "@/lib/signals/moving-average";
 import { rsi } from "@/lib/signals/rsi";
 import { detectVolumeAnomaly } from "@/lib/signals/volume";
 import { evaluateSignals } from "@/lib/rules/evaluate";
+import { getOrGenerateReason } from "@/lib/reasoning";
 
 export async function GET(request: Request) {
   try {
@@ -12,6 +13,7 @@ export async function GET(request: Request) {
     const itemName = searchParams.get("itemName");
     const platform = searchParams.get("platform");
     const holding = searchParams.get("holding") !== "false";
+    const withReason = searchParams.get("withReason") === "true";
 
     if (!itemName || !platform) {
       return NextResponse.json(
@@ -52,8 +54,11 @@ export async function GET(request: Request) {
       latestByPlatform.map((p) => ({ platform: p.platform, price: p.price }))
     );
 
+    // 默认不调 LLM，避免每次看面板都触发一次调用；只有显式要理由时才生成（有缓存兜底）。
+    const reason = withReason ? await getOrGenerateReason(itemName, rule) : null;
+
     return NextResponse.json({
-      data: { itemName, platform, signals, rule, crossPlatformSpread },
+      data: { itemName, platform, signals, rule, crossPlatformSpread, reason },
     });
   } catch (err) {
     return NextResponse.json(
