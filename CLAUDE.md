@@ -166,9 +166,9 @@ refactor(ui): 拆分 InventoryTable 为子组件
    - [x] 跨平台价差计算（C5 vs Steam）
 
 3. **Phase 3 — LLM 理由生成**
-   - [ ] NVIDIA NIM API 封装
-   - [ ] 把信号 prompt 化，生成中文建议理由
-   - [ ] 理由缓存（避免重复调用）
+   - [x] NVIDIA NIM API 封装（model id 是占位值，没有真实 key 没法端到端验证，拿到 key 后要确认）
+   - [x] 把信号 prompt 化，生成中文建议理由
+   - [x] 理由缓存（落库 reason_cache 表，按饰品+action+score+日期做 key）
 
 4. **Phase 4 — Dashboard UI**
    - [ ] 持仓总览页（/positions）
