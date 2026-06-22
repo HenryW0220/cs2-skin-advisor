@@ -66,9 +66,10 @@ export function updateInventoryItem(
   return getInventoryItem(id);
 }
 
-// 按饰品名查找，导入 Steam 库存时用来判断这个饰品是不是已经手动加过了，避免重复插入。
-export function findInventoryItemByName(itemName: string): IInventoryItem | undefined {
+// 同一个 item_name 可以有多条记录（同一个饰品分批买入、价格不一样，每条算一个"批次"/lot），
+// 没有唯一约束。导入 Steam 库存时用这个判断已经记录了多少数量，差额按新批次插入。
+export function findInventoryItemsByName(itemName: string): IInventoryItem[] {
   return getDb()
-    .prepare("SELECT * FROM inventory WHERE item_name = ? LIMIT 1")
-    .get(itemName) as IInventoryItem | undefined;
+    .prepare("SELECT * FROM inventory WHERE item_name = ?")
+    .all(itemName) as IInventoryItem[];
 }

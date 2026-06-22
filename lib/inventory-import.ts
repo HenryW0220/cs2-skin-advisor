@@ -1,35 +1,40 @@
 import { getSteamInventory } from "./api/steam";
-import { addInventoryItem, findInventoryItemByName, updateInventoryItem } from "./db/inventory";
+import { addInventoryItem, findInventoryItemsByName, updateInventoryItem } from "./db/inventory";
 
 export interface IImportSummary {
   totalFromSteam: number;
   imported: number;
+  newLots: number;
   backfilled: number;
-  skippedExisting: number;
+  unchanged: number;
   skippedNotMarketable: number;
   error?: string;
 }
 
-// 已经在 inventory 表里的饰品（按 item_name 判断）不会重复插入，但如果中文名/图标缺失
-// （比如这条记录是在加这两个字段之前导入的）会顺手补上，不会动用户已经改过的购入价。
+// 同一个饰品可能分批买入、每批价格不一样，所以不会简单地"已存在就跳过"：
+// - 第一次见到的饰品，新建一条记录（成本价未知先填 0）
+// - 已经记录的数量比 Steam 库存里少，说明又买了一批，按差额新建一条记录（同样成本价未知）
+// - 已经记录的数量够了，不新建，只是顺手把缺失的中文名/图标补上
+// 不会处理"数量变少"的情况（用户卖了多少不会自动猜，得自己用 DELETE 删掉对应批次）。
 // 不可在市场交易的（贴纸涂装以外、印花收藏品之类 marketable=0 的）跳过，跟"交易决策"无关。
-// 新饰品成本价不知道，先填 0，导入后要用户自己用 PATCH /api/inventory/:id 改成真实购入价。
 export async function importSteamInventory(steamId: string): Promise<IImportSummary> {
   const result = await getSteamInventory(steamId);
   if (result.error || !result.data) {
     return {
       totalFromSteam: 0,
       imported: 0,
+      newLots: 0,
       backfilled: 0,
-      skippedExisting: 0,
+      unchanged: 0,
       skippedNotMarketable: 0,
       error: result.error,
     };
   }
 
   let imported = 0;
+  let newLots = 0;
   let backfilled = 0;
-  let skippedExisting = 0;
+  let unchanged = 0;
   let skippedNotMarketable = 0;
 
   for (const item of result.data) {
@@ -38,35 +43,53 @@ export async function importSteamInventory(steamId: string): Promise<IImportSumm
       continue;
     }
 
-    const existing = findInventoryItemByName(item.marketHashName);
-    if (existing) {
-      if (!existing.name_cn || !existing.icon_url) {
-        updateInventoryItem(existing.id, { name_cn: item.nameCn, icon_url: item.iconUrl });
-        backfilled += 1;
-      } else {
-        skippedExisting += 1;
-      }
+    const existingLots = findInventoryItemsByName(item.marketHashName);
+    if (existingLots.length === 0) {
+      addInventoryItem({
+        item_name: item.marketHashName,
+        name_cn: item.nameCn,
+        icon_url: item.iconUrl,
+        platform: "steam",
+        buy_price: 0,
+        quantity: item.quantity,
+        buy_date: new Date().toISOString().slice(0, 10),
+        notes: "从 Steam 库存自动导入，成本未知，请用 PATCH /api/inventory/:id 修正购入价",
+      });
+      imported += 1;
       continue;
     }
 
-    addInventoryItem({
-      item_name: item.marketHashName,
-      name_cn: item.nameCn,
-      icon_url: item.iconUrl,
-      platform: "steam",
-      buy_price: 0,
-      quantity: item.quantity,
-      buy_date: new Date().toISOString().slice(0, 10),
-      notes: "从 Steam 库存自动导入，成本未知，请用 PATCH /api/inventory/:id 修正购入价",
-    });
-    imported += 1;
+    for (const lot of existingLots) {
+      if (!lot.name_cn || !lot.icon_url) {
+        updateInventoryItem(lot.id, { name_cn: item.nameCn, icon_url: item.iconUrl });
+      }
+    }
+    backfilled += 1;
+
+    const existingTotalQty = existingLots.reduce((sum, lot) => sum + lot.quantity, 0);
+    if (item.quantity > existingTotalQty) {
+      addInventoryItem({
+        item_name: item.marketHashName,
+        name_cn: item.nameCn,
+        icon_url: item.iconUrl,
+        platform: "steam",
+        buy_price: 0,
+        quantity: item.quantity - existingTotalQty,
+        buy_date: new Date().toISOString().slice(0, 10),
+        notes: "从 Steam 库存同步发现新增数量，成本未知，请用 PATCH /api/inventory/:id 修正购入价",
+      });
+      newLots += 1;
+    } else {
+      unchanged += 1;
+    }
   }
 
   return {
     totalFromSteam: result.data.length,
     imported,
+    newLots,
     backfilled,
-    skippedExisting,
+    unchanged,
     skippedNotMarketable,
   };
 }

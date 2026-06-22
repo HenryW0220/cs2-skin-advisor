@@ -31,6 +31,14 @@ const ACTION_STYLE: Record<ITradeAction, string> = {
 const SORT_KEYS = ["market", "buy", "pnl", "days"] as const;
 type ISortKey = (typeof SORT_KEYS)[number];
 
+interface ISearchParams {
+  lang?: string;
+  q?: string;
+  sortBy?: string;
+  sortDir?: string;
+  merge?: string;
+}
+
 function holdingDays(buyDate: string): number {
   const diffMs = Date.now() - new Date(buyDate).getTime();
   return Math.max(0, Math.floor(diffMs / (24 * 60 * 60 * 1000)));
@@ -44,14 +52,22 @@ function formatSigned(value: number, suffix = ""): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}${suffix}`;
 }
 
+function buildHref(base: Record<string, string | undefined>): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(base)) {
+    if (value) params.set(key, value);
+  }
+  return `/positions?${params.toString()}`;
+}
+
 interface IPositionRow {
-  id: number;
+  ids: number[];
   itemName: string;
   nameCn: string | null;
   iconUrl: string | null;
   quantity: number;
-  buyPrice: number;
-  buyDate: string;
+  buyPrice: number; // 多批次合并时是加权平均价
+  buyDate: string; // 多批次合并时取最早一批的购入日
   marketPrice: number | null;
   platform: string | null;
   action: ITradeAction | null;
@@ -59,16 +75,60 @@ interface IPositionRow {
   pnlPercent: number | null;
   changeTodayPercent: number | null;
   recentPrices: number[];
+  editable: boolean; // 合并后的购入价是加权平均，编辑没有意义，只在展开（单批次）时能改
+}
+
+// 同一个 item_name 的多个批次（分开几次买、价格不同）合并成一行，购入价按数量加权平均，
+// 持有天数按最早那一批算（持有时间最长的那笔最有参考意义）。
+function mergeByItemName(rows: IPositionRow[]): IPositionRow[] {
+  const groups = new Map<string, IPositionRow[]>();
+  for (const row of rows) {
+    const list = groups.get(row.itemName) ?? [];
+    list.push(row);
+    groups.set(row.itemName, list);
+  }
+
+  return [...groups.values()].map((group) => {
+    if (group.length === 1) return group[0];
+
+    const totalQty = group.reduce((sum, r) => sum + r.quantity, 0);
+    const totalCost = group.reduce((sum, r) => sum + r.buyPrice * r.quantity, 0);
+    const earliest = group.reduce((a, b) => (a.buyDate < b.buyDate ? a : b));
+    const marketPrice = group[0].marketPrice;
+    const pnl = marketPrice !== null ? marketPrice * totalQty - totalCost : null;
+    // 不同批次可能不是每条都有中文名/图标（比如新批次还没跑过 Steam 导入回填），
+    // 取组里第一个有值的，不要固定用 group[0]（它可能恰好是缺字段的那条）。
+    const withDisplayInfo = group.find((r) => r.nameCn && r.iconUrl) ?? group[0];
+
+    return {
+      ids: group.flatMap((r) => r.ids),
+      itemName: group[0].itemName,
+      nameCn: withDisplayInfo.nameCn,
+      iconUrl: withDisplayInfo.iconUrl,
+      quantity: totalQty,
+      buyPrice: totalQty > 0 ? totalCost / totalQty : 0,
+      buyDate: earliest.buyDate,
+      marketPrice,
+      platform: group[0].platform,
+      action: group[0].action,
+      pnl,
+      pnlPercent: pnl !== null && totalCost > 0 ? (pnl / totalCost) * 100 : null,
+      changeTodayPercent: group[0].changeTodayPercent,
+      recentPrices: group[0].recentPrices,
+      editable: false,
+    };
+  });
 }
 
 export default async function PositionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ lang?: string; q?: string; sortBy?: string; sortDir?: string }>;
+  searchParams: Promise<ISearchParams>;
 }) {
   const sp = await searchParams;
   const showEnglish = sp.lang === "en";
   const query = sp.q?.trim().toLowerCase() ?? "";
+  const merged = sp.merge === "true";
   const sortBy = SORT_KEYS.includes(sp.sortBy as ISortKey) ? (sp.sortBy as ISortKey) : undefined;
   const sortDir = sp.sortDir === "asc" ? "asc" : "desc";
 
@@ -88,7 +148,7 @@ export default async function PositionsPage({
         : null;
 
     return {
-      id: item.id,
+      ids: [item.id],
       itemName: item.item_name,
       nameCn: item.name_cn,
       iconUrl: item.icon_url,
@@ -102,8 +162,13 @@ export default async function PositionsPage({
       pnlPercent,
       changeTodayPercent: summary?.changeToday?.percent ?? null,
       recentPrices: summary?.recentPrices ?? [],
+      editable: true,
     };
   });
+
+  if (merged) {
+    rows = mergeByItemName(rows);
+  }
 
   if (query) {
     rows = rows.filter(
@@ -144,12 +209,11 @@ export default async function PositionsPage({
   const totalPnlPercent = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
 
   function sortLink(key: ISortKey): string {
-    const params = new URLSearchParams();
-    if (sp.lang) params.set("lang", sp.lang);
-    if (sp.q) params.set("q", sp.q);
-    params.set("sortBy", key);
-    params.set("sortDir", sortBy === key && sortDir === "desc" ? "asc" : "desc");
-    return `/positions?${params.toString()}`;
+    return buildHref({
+      ...sp,
+      sortBy: key,
+      sortDir: sortBy === key && sortDir === "desc" ? "asc" : "desc",
+    });
   }
 
   function sortArrow(key: ISortKey): string {
@@ -172,13 +236,13 @@ export default async function PositionsPage({
         </div>
         <div className="ml-4 flex shrink-0 gap-1 rounded-lg border border-neutral-800 p-1 text-xs">
           <Link
-            href={`/positions?${new URLSearchParams({ ...(sp.q ? { q: sp.q } : {}), lang: "zh" })}`}
+            href={buildHref({ ...sp, lang: "zh" })}
             className={`rounded px-2 py-1 ${!showEnglish ? "bg-neutral-800 text-neutral-100" : "text-neutral-500"}`}
           >
             中文
           </Link>
           <Link
-            href={`/positions?${new URLSearchParams({ ...(sp.q ? { q: sp.q } : {}), lang: "en" })}`}
+            href={buildHref({ ...sp, lang: "en" })}
             className={`rounded px-2 py-1 ${showEnglish ? "bg-neutral-800 text-neutral-100" : "text-neutral-500"}`}
           >
             EN
@@ -189,6 +253,7 @@ export default async function PositionsPage({
       <div className="flex items-center justify-between gap-3">
         <form action="/positions" method="GET" className="flex items-center gap-2">
           {sp.lang && <input type="hidden" name="lang" value={sp.lang} />}
+          {sp.merge && <input type="hidden" name="merge" value={sp.merge} />}
           <input
             type="text"
             name="q"
@@ -197,8 +262,27 @@ export default async function PositionsPage({
             className="w-64 rounded border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm placeholder:text-neutral-600 focus:border-neutral-500 focus:outline-none"
           />
         </form>
-        <RefreshInventoryButton />
+        <div className="flex items-center gap-3">
+          <Link
+            href={buildHref({ ...sp, merge: merged ? undefined : "true" })}
+            className="flex items-center gap-1.5 text-xs text-neutral-400 hover:text-neutral-100"
+          >
+            <span
+              className={`flex size-4 items-center justify-center rounded border ${merged ? "border-blue-400 bg-blue-500/20 text-blue-400" : "border-neutral-600"}`}
+            >
+              {merged ? "✓" : ""}
+            </span>
+            合并相同项
+          </Link>
+          <RefreshInventoryButton />
+        </div>
       </div>
+
+      {merged && (
+        <p className="text-xs text-neutral-500">
+          已合并同名饰品的多个购入批次，购入价是按数量加权平均算的，这种汇总视图下不能编辑——取消勾选可以展开看每一批的真实购入价并单独修改。
+        </p>
+      )}
 
       <div className="overflow-x-auto rounded-lg border border-neutral-800">
         <table className="w-full text-sm">
@@ -228,7 +312,7 @@ export default async function PositionsPage({
             {rows.map((row) => {
               const displayName = (showEnglish ? null : row.nameCn) ?? row.itemName;
               return (
-                <tr key={row.id} className="hover:bg-neutral-900/60">
+                <tr key={row.ids.join(",")} className="hover:bg-neutral-900/60">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       {row.iconUrl ? (
@@ -253,7 +337,11 @@ export default async function PositionsPage({
                     {row.marketPrice !== null ? `¥${formatMoney(row.marketPrice)}` : "暂无数据"}
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <EditableBuyPrice itemId={row.id} value={row.buyPrice} />
+                    {row.editable ? (
+                      <EditableBuyPrice itemId={row.ids[0]} value={row.buyPrice} />
+                    ) : (
+                      <span className="text-neutral-300">¥{formatMoney(row.buyPrice)}</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right">
                     {row.pnl !== null ? (
