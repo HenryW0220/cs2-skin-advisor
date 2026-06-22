@@ -2,7 +2,7 @@ import { TokenBucket } from "./rate-limiter";
 import type {
   IC5Envelope,
   IC5InventoryListData,
-  IC5PriceQuery,
+  IC5ProductPriceMap,
   IC5SellerOrderListData,
 } from "../types";
 
@@ -20,21 +20,32 @@ interface IC5Result<T> {
 
 async function c5Request<T>(
   path: string,
-  query: Record<string, string | number | undefined>,
-  extraLimiter?: TokenBucket
+  options: {
+    method?: "GET" | "POST";
+    query?: Record<string, string | number | undefined>;
+    body?: unknown;
+    extraLimiter?: TokenBucket;
+  } = {}
 ): Promise<IC5Result<T>> {
-  if (extraLimiter) await extraLimiter.acquire();
+  if (options.extraLimiter) await options.extraLimiter.acquire();
   await globalLimiter.acquire();
 
   const url = new URL(path, BASE_URL);
-  for (const [key, value] of Object.entries(query)) {
-    if (value !== undefined) url.searchParams.set(key, String(value));
+  if (options.query) {
+    for (const [key, value] of Object.entries(options.query)) {
+      if (value !== undefined) url.searchParams.set(key, String(value));
+    }
   }
   url.searchParams.set("app-key", APP_KEY);
 
   try {
     const res = await fetch(url, {
-      headers: { "Accept-Encoding": "gzip, br, zstd, deflate" },
+      method: options.method ?? "GET",
+      headers: {
+        "Accept-Encoding": "gzip, br, zstd, deflate",
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
     });
     if (!res.ok) {
       return { data: null, error: `C5 ${path} 返回 HTTP ${res.status}` };
@@ -63,11 +74,13 @@ export async function getInventoryList(
   return c5Request<IC5InventoryListData>(
     `/merchant/inventory/v2/${encodeURIComponent(steamId)}/${appId}`,
     {
-      language: options.language ?? "zh",
-      startAssetId: options.startAssetId ?? 0,
-      count: options.count ?? 20,
-    },
-    inventoryLimiter
+      query: {
+        language: options.language ?? "zh",
+        startAssetId: options.startAssetId ?? 0,
+        count: options.count ?? 20,
+      },
+      extraLimiter: inventoryLimiter,
+    }
   );
 }
 
@@ -76,17 +89,22 @@ export async function getSellerOrderList(
   options: { appId?: number; status?: number; page?: number; limit?: number } = {}
 ): Promise<IC5Result<IC5SellerOrderListData>> {
   return c5Request<IC5SellerOrderListData>("/merchant/order/v1/list", {
-    steamId,
-    appId: options.appId ?? 730,
-    status: options.status ?? 1,
-    page: options.page,
-    limit: options.limit,
+    query: {
+      steamId,
+      appId: options.appId ?? 730,
+      status: options.status ?? 1,
+      page: options.page,
+      limit: options.limit,
+    },
   });
 }
 
-// path 还没确认（文档给的 /open/product/price 实测 404），先保留函数签名，等确认路径后再改实现。
-export async function getProductPrice(
-  marketHashName: string
-): Promise<IC5Result<IC5PriceQuery>> {
-  return c5Request<IC5PriceQuery>("/open/product/price", { marketHashName });
+export async function getProductPrices(
+  marketHashNames: string[],
+  appId = "730"
+): Promise<IC5Result<IC5ProductPriceMap>> {
+  return c5Request<IC5ProductPriceMap>("/merchant/product/price/batch", {
+    method: "POST",
+    body: { appId, marketHashNames },
+  });
 }

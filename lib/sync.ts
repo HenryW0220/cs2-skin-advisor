@@ -1,5 +1,5 @@
-import { getProductPrice } from "./api/c5";
-import { getSinglePrice } from "./api/steamdt";
+import { getProductPrices } from "./api/c5";
+import { getBatchPrice } from "./api/steamdt";
 import { listInventory } from "./db/inventory";
 import { insertPriceSnapshot } from "./db/snapshots";
 import { listWatchlist } from "./db/watchlist";
@@ -23,26 +23,28 @@ function getTrackedItemNames(): string[] {
   return [...names];
 }
 
-// 手动触发的全量价格刷新：对持仓 + 观察池里的每个饰品，分别查 SteamDT 和 C5，写进 price_snapshots。
-// 单个饰品某个数据源失败不会中断整体流程，失败原因收集到 errors 里返回给调用方。
+// 手动触发的全量价格刷新：SteamDT 和 C5 各批量查一次（不是每个饰品单独调），写进 price_snapshots。
+// 某个数据源整体失败不影响另一个，失败原因收集到 errors 里返回给调用方。
 export async function syncPriceSnapshots(): Promise<ISyncSummary> {
   const itemNames = getTrackedItemNames();
   const capturedAt = new Date().toISOString();
   let snapshotCount = 0;
   const errors: ISyncError[] = [];
 
-  for (const itemName of itemNames) {
-    const steamDtResult = await getSinglePrice(itemName);
-    if (steamDtResult.error || !steamDtResult.data) {
-      errors.push({
-        itemName,
-        source: "steamdt",
-        error: steamDtResult.error ?? "无数据",
-      });
-    } else {
-      for (const platformPrice of steamDtResult.data) {
+  if (itemNames.length === 0) {
+    return { itemCount: 0, snapshotCount: 0, errors: [] };
+  }
+
+  const steamDtResult = await getBatchPrice(itemNames);
+  if (steamDtResult.error || !steamDtResult.data) {
+    for (const itemName of itemNames) {
+      errors.push({ itemName, source: "steamdt", error: steamDtResult.error ?? "无数据" });
+    }
+  } else {
+    for (const item of steamDtResult.data) {
+      for (const platformPrice of item.dataList) {
         insertPriceSnapshot({
-          item_name: itemName,
+          item_name: item.marketHashName,
           platform: platformPrice.platform,
           price: platformPrice.sellPrice,
           volume: platformPrice.sellCount,
@@ -53,16 +55,25 @@ export async function syncPriceSnapshots(): Promise<ISyncSummary> {
         snapshotCount += 1;
       }
     }
+  }
 
-    const c5Result = await getProductPrice(itemName);
-    if (c5Result.error || !c5Result.data) {
+  const c5Result = await getProductPrices(itemNames);
+  if (c5Result.error || !c5Result.data) {
+    for (const itemName of itemNames) {
       errors.push({ itemName, source: "c5", error: c5Result.error ?? "无数据" });
-    } else {
+    }
+  } else {
+    for (const itemName of itemNames) {
+      const entry = c5Result.data[itemName];
+      if (!entry) {
+        errors.push({ itemName, source: "c5", error: "批量响应里没有这个饰品" });
+        continue;
+      }
       insertPriceSnapshot({
         item_name: itemName,
         platform: "c5",
-        price: c5Result.data.price,
-        volume: null,
+        price: entry.price,
+        volume: entry.count,
         captured_at: capturedAt,
       });
       snapshotCount += 1;

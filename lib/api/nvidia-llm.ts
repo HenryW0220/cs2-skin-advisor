@@ -1,8 +1,7 @@
 const BASE_URL = process.env.NVIDIA_API_BASE_URL ?? "https://integrate.api.nvidia.com/v1";
 const API_KEY = process.env.NVIDIA_API_KEY ?? "";
-// 具体用哪个免费模型 CLAUDE.md 里没定下来，这个 id 没有用真实 key 验证过，
-// 拿到 key 之后第一次调用要确认这个模型在 NVIDIA NIM 目录里确实可用、确实免费。
-const MODEL = process.env.NVIDIA_MODEL ?? "meta/llama-3.1-8b-instruct";
+// 用真实 key 实测过 deepseek-ai/deepseek-v4-flash 可用且免费。
+const MODEL = process.env.NVIDIA_MODEL ?? "deepseek-ai/deepseek-v4-flash";
 
 interface ILlmResult {
   data: string | null;

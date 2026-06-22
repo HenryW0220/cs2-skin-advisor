@@ -90,12 +90,16 @@ export interface IC5SellerOrderListData {
   list: IC5SellerOrder[];
 }
 
-// 价格查询接口的真实 path 还没确认（文档里给的 /open/product/price 实测 404），
-// 响应字段先按 price 占位，等路径确认后再补全。
-export interface IC5PriceQuery {
+export interface IC5ProductPrice {
+  itemId: string;
+  marketHashName: string;
   price: number;
-  [key: string]: unknown;
+  count: number;
+  website: string;
 }
+
+// 批量价格查询的 data 是按 marketHashName 做 key 的 map，不是数组。
+export type IC5ProductPriceMap = Record<string, IC5ProductPrice>;
 
 // SteamDT 接口返回类型
 
