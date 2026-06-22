@@ -55,16 +55,29 @@ export async function generateTradeReason(input: {
   action: string;
   score: number;
   reasons: string[];
+  recentPrices?: number[];
+  changeTodayPercent?: number | null;
 }): Promise<ILlmResult> {
+  // 这里只是让 LLM 用人话描述"近期走势看起来怎样、什么时候买卖更合适"，
+  // 本质还是基于规则引擎已经算出来的 score/reasons 做转述和外推，不是独立的预测模型。
   const systemPrompt =
-    "你是 CS2 饰品交易顾问，根据给定的技术指标信号，用简洁的中文向用户解释为什么给出这个建议。" +
-    "不超过 3 句话，不要重复输出指标原始数值，用自然语言转述。";
+    "你是 CS2 饰品交易顾问。根据给定的技术指标信号和近期价格走势，用简洁的中文做两件事：" +
+    "1）说明当前操作建议的理由；2）判断近期走势可能怎么走，给一个买入或卖出时间窗口的建议" +
+    "（比如「短期均线走弱，可以等价格再回落一些再考虑」）。" +
+    "不超过 4 句话，不要逐字重复输入的数值，不要用免责声明式的套话。";
+
   const userPrompt = [
     `饰品：${input.itemName}`,
     `建议操作：${input.action}`,
     `信号强度 score：${input.score}`,
     `触发的信号：${input.reasons.join("；") || "无明显信号"}`,
-  ].join("\n");
+    input.changeTodayPercent != null ? `今日涨跌：${input.changeTodayPercent.toFixed(2)}%` : null,
+    input.recentPrices && input.recentPrices.length > 1
+      ? `近7天价格序列（按时间从早到晚）：${input.recentPrices.map((p) => p.toFixed(2)).join(", ")}`
+      : null,
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
 
   return chatCompletion(systemPrompt, userPrompt);
 }

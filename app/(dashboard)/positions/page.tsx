@@ -1,4 +1,8 @@
 import Link from "next/link";
+import { AiInsight } from "@/components/features/ai-insight";
+import { EditableBuyPrice } from "@/components/features/editable-buy-price";
+import { RefreshInventoryButton } from "@/components/features/refresh-inventory-button";
+import { Sparkline } from "@/components/ui/sparkline";
 import { STEAM_ICON_BASE_URL } from "@/lib/api/steam";
 import { listInventory } from "@/lib/db/inventory";
 import { getLatestPricesByPlatform } from "@/lib/db/snapshots";
@@ -6,8 +10,8 @@ import { computeSignalSummary, pickReferencePlatform } from "@/lib/signal-summar
 import type { ITradeAction } from "@/lib/rules/evaluate";
 
 // 跟着 C5GAME/SteamDT 的习惯走：涨=红，跌=绿（国内行情软件的配色，跟欧美的红跌绿涨反过来）。
-function pnlColor(pnl: number): string {
-  return pnl >= 0 ? "text-red-400" : "text-emerald-400";
+function pnlColor(value: number): string {
+  return value >= 0 ? "text-red-400" : "text-emerald-400";
 }
 
 const ACTION_LABEL: Record<ITradeAction, string> = {
@@ -24,6 +28,9 @@ const ACTION_STYLE: Record<ITradeAction, string> = {
   WATCH: "bg-blue-500/15 text-blue-400",
 };
 
+const SORT_KEYS = ["market", "buy", "pnl", "days"] as const;
+type ISortKey = (typeof SORT_KEYS)[number];
+
 function holdingDays(buyDate: string): number {
   const diffMs = Date.now() - new Date(buyDate).getTime();
   return Math.max(0, Math.floor(diffMs / (24 * 60 * 60 * 1000)));
@@ -31,6 +38,10 @@ function holdingDays(buyDate: string): number {
 
 function formatMoney(value: number): string {
   return value.toFixed(2);
+}
+
+function formatSigned(value: number, suffix = ""): string {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}${suffix}`;
 }
 
 interface IPositionRow {
@@ -42,26 +53,39 @@ interface IPositionRow {
   buyPrice: number;
   buyDate: string;
   marketPrice: number | null;
+  platform: string | null;
   action: ITradeAction | null;
+  pnl: number | null;
+  pnlPercent: number | null;
+  changeTodayPercent: number | null;
+  recentPrices: number[];
 }
 
 export default async function PositionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ lang?: string }>;
+  searchParams: Promise<{ lang?: string; q?: string; sortBy?: string; sortDir?: string }>;
 }) {
-  const { lang } = await searchParams;
-  // 中文名只有 Steam 导入的饰品才有，手动添加的没有，没有的话不管选哪个语言都退回显示英文名。
-  const showEnglish = lang === "en";
+  const sp = await searchParams;
+  const showEnglish = sp.lang === "en";
+  const query = sp.q?.trim().toLowerCase() ?? "";
+  const sortBy = SORT_KEYS.includes(sp.sortBy as ISortKey) ? (sp.sortBy as ISortKey) : undefined;
+  const sortDir = sp.sortDir === "asc" ? "asc" : "desc";
 
   const inventory = listInventory();
 
-  const rows: IPositionRow[] = inventory.map((item) => {
+  let rows: IPositionRow[] = inventory.map((item) => {
     const platform = pickReferencePlatform(item.item_name);
     const latest = platform
       ? getLatestPricesByPlatform(item.item_name).find((p) => p.platform === platform)
       : undefined;
     const summary = platform ? computeSignalSummary(item.item_name, platform, true) : null;
+    const marketPrice = latest?.price ?? null;
+    const pnl = marketPrice !== null ? (marketPrice - item.buy_price) * item.quantity : null;
+    const pnlPercent =
+      marketPrice !== null && item.buy_price > 0
+        ? ((marketPrice - item.buy_price) / item.buy_price) * 100
+        : null;
 
     return {
       id: item.id,
@@ -71,41 +95,90 @@ export default async function PositionsPage({
       quantity: item.quantity,
       buyPrice: item.buy_price,
       buyDate: item.buy_date,
-      marketPrice: latest?.price ?? null,
+      marketPrice,
+      platform,
       action: summary?.rule.action ?? null,
+      pnl,
+      pnlPercent,
+      changeTodayPercent: summary?.changeToday?.percent ?? null,
+      recentPrices: summary?.recentPrices ?? [],
     };
   });
 
-  const totalMarketValue = rows.reduce((sum, r) => sum + (r.marketPrice ?? 0) * r.quantity, 0);
-  const totalCost = rows.reduce((sum, r) => sum + r.buyPrice * r.quantity, 0);
-  const totalPnl = rows.reduce(
-    (sum, r) => sum + ((r.marketPrice ?? r.buyPrice) - r.buyPrice) * r.quantity,
-    0
-  );
+  if (query) {
+    rows = rows.filter(
+      (r) =>
+        r.itemName.toLowerCase().includes(query) ||
+        (r.nameCn?.toLowerCase().includes(query) ?? false)
+    );
+  }
+
+  if (sortBy) {
+    const sortValue = (row: IPositionRow): number => {
+      switch (sortBy) {
+        case "market":
+          return row.marketPrice ?? NaN;
+        case "buy":
+          return row.buyPrice;
+        case "pnl":
+          return row.pnl ?? NaN;
+        case "days":
+          return holdingDays(row.buyDate);
+      }
+    };
+    const withValue = rows.filter((r) => !Number.isNaN(sortValue(r)));
+    const withoutValue = rows.filter((r) => Number.isNaN(sortValue(r)));
+    withValue.sort((a, b) => (sortValue(a) - sortValue(b)) * (sortDir === "asc" ? 1 : -1));
+    rows = [...withValue, ...withoutValue];
+  }
+
+  const totalMarketValue = inventory.reduce((sum, item) => {
+    const platform = pickReferencePlatform(item.item_name);
+    const latest = platform
+      ? getLatestPricesByPlatform(item.item_name).find((p) => p.platform === platform)
+      : undefined;
+    return sum + (latest?.price ?? 0) * item.quantity;
+  }, 0);
+  const totalCost = inventory.reduce((sum, item) => sum + item.buy_price * item.quantity, 0);
+  const totalPnl = totalMarketValue - totalCost;
   const totalPnlPercent = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
+
+  function sortLink(key: ISortKey): string {
+    const params = new URLSearchParams();
+    if (sp.lang) params.set("lang", sp.lang);
+    if (sp.q) params.set("q", sp.q);
+    params.set("sortBy", key);
+    params.set("sortDir", sortBy === key && sortDir === "desc" ? "asc" : "desc");
+    return `/positions?${params.toString()}`;
+  }
+
+  function sortArrow(key: ISortKey): string {
+    if (sortBy !== key) return "";
+    return sortDir === "desc" ? " ↓" : " ↑";
+  }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="grid flex-1 grid-cols-3 gap-4">
-          <SummaryCard label="市场价(元)" value={formatMoney(totalMarketValue)} sub={`${rows.length} 件`} />
+          <SummaryCard label="市场价(元)" value={formatMoney(totalMarketValue)} sub={`${inventory.length} 件`} />
           <SummaryCard
             label="总盈亏(元)"
-            value={`${totalPnl >= 0 ? "+" : ""}${formatMoney(totalPnl)}`}
-            sub={`${totalPnlPercent >= 0 ? "+" : ""}${totalPnlPercent.toFixed(2)}%`}
+            value={formatSigned(totalPnl)}
+            sub={`${formatSigned(totalPnlPercent)}%`}
             valueClassName={pnlColor(totalPnl)}
           />
           <SummaryCard label="购入成本(元)" value={formatMoney(totalCost)} />
         </div>
         <div className="ml-4 flex shrink-0 gap-1 rounded-lg border border-neutral-800 p-1 text-xs">
           <Link
-            href="/positions?lang=zh"
+            href={`/positions?${new URLSearchParams({ ...(sp.q ? { q: sp.q } : {}), lang: "zh" })}`}
             className={`rounded px-2 py-1 ${!showEnglish ? "bg-neutral-800 text-neutral-100" : "text-neutral-500"}`}
           >
             中文
           </Link>
           <Link
-            href="/positions?lang=en"
+            href={`/positions?${new URLSearchParams({ ...(sp.q ? { q: sp.q } : {}), lang: "en" })}`}
             className={`rounded px-2 py-1 ${showEnglish ? "bg-neutral-800 text-neutral-100" : "text-neutral-500"}`}
           >
             EN
@@ -113,26 +186,46 @@ export default async function PositionsPage({
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-lg border border-neutral-800">
+      <div className="flex items-center justify-between gap-3">
+        <form action="/positions" method="GET" className="flex items-center gap-2">
+          {sp.lang && <input type="hidden" name="lang" value={sp.lang} />}
+          <input
+            type="text"
+            name="q"
+            defaultValue={sp.q}
+            placeholder="搜索饰品名称（中/英文都行）"
+            className="w-64 rounded border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm placeholder:text-neutral-600 focus:border-neutral-500 focus:outline-none"
+          />
+        </form>
+        <RefreshInventoryButton />
+      </div>
+
+      <div className="overflow-x-auto rounded-lg border border-neutral-800">
         <table className="w-full text-sm">
           <thead className="bg-neutral-900 text-neutral-400">
             <tr>
               <th className="px-4 py-3 text-left">饰品</th>
-              <th className="px-4 py-3 text-right">市场价</th>
-              <th className="px-4 py-3 text-right">购入价</th>
-              <th className="px-4 py-3 text-right">盈亏</th>
+              <th className="px-4 py-3 text-right">
+                <Link href={sortLink("market")}>市场价{sortArrow("market")}</Link>
+              </th>
+              <th className="px-4 py-3 text-right">
+                <Link href={sortLink("buy")}>购入价{sortArrow("buy")}</Link>
+              </th>
+              <th className="px-4 py-3 text-right">
+                <Link href={sortLink("pnl")}>盈亏{sortArrow("pnl")}</Link>
+              </th>
+              <th className="px-4 py-3 text-right">收益率</th>
+              <th className="px-4 py-3 text-right">今日涨跌</th>
+              <th className="px-4 py-3 text-center">近7天走势</th>
               <th className="px-4 py-3 text-center">建议</th>
-              <th className="px-4 py-3 text-right">持有天数</th>
+              <th className="px-4 py-3 text-left">AI 建议</th>
+              <th className="px-4 py-3 text-right">
+                <Link href={sortLink("days")}>持有天数{sortArrow("days")}</Link>
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-800">
             {rows.map((row) => {
-              const pnl =
-                row.marketPrice !== null ? (row.marketPrice - row.buyPrice) * row.quantity : null;
-              const pnlPercent =
-                row.marketPrice !== null && row.buyPrice > 0
-                  ? ((row.marketPrice - row.buyPrice) / row.buyPrice) * 100
-                  : null;
               const displayName = (showEnglish ? null : row.nameCn) ?? row.itemName;
               return (
                 <tr key={row.id} className="hover:bg-neutral-900/60">
@@ -159,19 +252,36 @@ export default async function PositionsPage({
                   <td className="px-4 py-3 text-right">
                     {row.marketPrice !== null ? `¥${formatMoney(row.marketPrice)}` : "暂无数据"}
                   </td>
-                  <td className="px-4 py-3 text-right text-neutral-400">
-                    ¥{formatMoney(row.buyPrice)}
+                  <td className="px-4 py-3 text-right">
+                    <EditableBuyPrice itemId={row.id} value={row.buyPrice} />
                   </td>
                   <td className="px-4 py-3 text-right">
-                    {pnl !== null && pnlPercent !== null ? (
-                      <span className={pnlColor(pnl)}>
-                        {pnl >= 0 ? "+" : ""}
-                        {formatMoney(pnl)}（{pnlPercent >= 0 ? "+" : ""}
-                        {pnlPercent.toFixed(2)}%）
+                    {row.pnl !== null ? (
+                      <span className={pnlColor(row.pnl)}>¥{formatSigned(row.pnl)}</span>
+                    ) : (
+                      <span className="text-neutral-500">-</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {row.pnlPercent !== null ? (
+                      <span className={pnlColor(row.pnlPercent)}>
+                        {formatSigned(row.pnlPercent)}%
                       </span>
                     ) : (
                       <span className="text-neutral-500">-</span>
                     )}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {row.changeTodayPercent !== null ? (
+                      <span className={pnlColor(row.changeTodayPercent)}>
+                        {formatSigned(row.changeTodayPercent)}%
+                      </span>
+                    ) : (
+                      <span className="text-neutral-500">-</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <Sparkline prices={row.recentPrices} />
                   </td>
                   <td className="px-4 py-3 text-center">
                     {row.action ? (
@@ -182,6 +292,13 @@ export default async function PositionsPage({
                       <span className="text-xs text-neutral-500">暂无信号</span>
                     )}
                   </td>
+                  <td className="px-4 py-3">
+                    {row.platform ? (
+                      <AiInsight itemName={row.itemName} platform={row.platform} />
+                    ) : (
+                      <span className="text-xs text-neutral-500">暂无数据</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-right text-neutral-400">
                     {holdingDays(row.buyDate)} 天
                   </td>
@@ -190,8 +307,10 @@ export default async function PositionsPage({
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-neutral-500">
-                  还没有持仓，先调用 POST /api/inventory 添加
+                <td colSpan={10} className="px-4 py-10 text-center text-neutral-500">
+                  {inventory.length === 0
+                    ? "还没有持仓，先点右上角刷新库存或调用 POST /api/inventory 添加"
+                    : "没有匹配的饰品"}
                 </td>
               </tr>
             )}

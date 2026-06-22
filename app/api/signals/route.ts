@@ -26,7 +26,12 @@ export async function GET(request: Request) {
     }
 
     // 默认不调 LLM，避免每次看面板都触发一次调用；只有显式要理由时才生成（有缓存兜底）。
-    const reason = withReason ? await getOrGenerateReason(itemName, summary.rule) : null;
+    const reason = withReason
+      ? await getOrGenerateReason(itemName, summary.rule, {
+          recentPrices: summary.recentPrices,
+          changeTodayPercent: summary.changeToday?.percent ?? null,
+        })
+      : null;
 
     return NextResponse.json({ data: { ...summary, reason } });
   } catch (err) {
