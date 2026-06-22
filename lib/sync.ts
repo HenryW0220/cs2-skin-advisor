@@ -71,7 +71,8 @@ export async function syncPriceSnapshots(): Promise<ISyncSummary> {
       }
       insertPriceSnapshot({
         item_name: itemName,
-        platform: "c5",
+        // 跟 SteamDT 聚合数据里的 "C5" 平台名对齐（大写），不然会被当成两个不同平台。
+        platform: "C5",
         price: entry.price,
         volume: entry.count,
         captured_at: capturedAt,

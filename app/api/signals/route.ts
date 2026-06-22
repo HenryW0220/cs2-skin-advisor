@@ -1,10 +1,5 @@
 import { NextResponse } from "next/server";
-import { getLatestPricesByPlatform, getPriceHistory } from "@/lib/db/snapshots";
-import { computeCrossPlatformSpread } from "@/lib/signals/cross-platform";
-import { movingAverage } from "@/lib/signals/moving-average";
-import { rsi } from "@/lib/signals/rsi";
-import { detectVolumeAnomaly } from "@/lib/signals/volume";
-import { evaluateSignals } from "@/lib/rules/evaluate";
+import { computeSignalSummary } from "@/lib/signal-summary";
 import { getOrGenerateReason } from "@/lib/reasoning";
 
 export async function GET(request: Request) {
@@ -22,44 +17,18 @@ export async function GET(request: Request) {
       );
     }
 
-    const history = getPriceHistory(itemName, platform);
-    if (history.length === 0) {
+    const summary = computeSignalSummary(itemName, platform, holding);
+    if (!summary) {
       return NextResponse.json(
         { data: null, error: "没有价格数据，先调用 POST /api/sync 拉一次" },
         { status: 404 }
       );
     }
 
-    const prices = history.map((h) => h.price);
-    const volumes = history.map((h) => h.volume ?? 0);
-    const latestIndex = prices.length - 1;
-
-    const ma7 = movingAverage(prices, 7)[latestIndex] ?? null;
-    const ma30 = movingAverage(prices, 30)[latestIndex] ?? null;
-    const rsi14 = rsi(prices, 14)[latestIndex] ?? null;
-    const volumeAnomaly = detectVolumeAnomaly(volumes);
-
-    const signals = {
-      price: prices[latestIndex],
-      ma7,
-      ma30,
-      rsi14,
-      volumeAnomalyRatio: volumeAnomaly?.ratio ?? null,
-    };
-
-    const rule = evaluateSignals(signals, { holding });
-
-    const latestByPlatform = getLatestPricesByPlatform(itemName);
-    const crossPlatformSpread = computeCrossPlatformSpread(
-      latestByPlatform.map((p) => ({ platform: p.platform, price: p.price }))
-    );
-
     // 默认不调 LLM，避免每次看面板都触发一次调用；只有显式要理由时才生成（有缓存兜底）。
-    const reason = withReason ? await getOrGenerateReason(itemName, rule) : null;
+    const reason = withReason ? await getOrGenerateReason(itemName, summary.rule) : null;
 
-    return NextResponse.json({
-      data: { itemName, platform, signals, rule, crossPlatformSpread, reason },
-    });
+    return NextResponse.json({ data: { ...summary, reason } });
   } catch (err) {
     return NextResponse.json(
       { data: null, error: err instanceof Error ? err.message : String(err) },
