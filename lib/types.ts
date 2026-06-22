@@ -8,6 +8,7 @@ export interface IInventoryItem {
   quantity: number;
   buy_date: string;
   notes: string | null;
+  steam_asset_id: string | null; // Steam 导入按这个去重，每个独立 asset 一行；手动添加的是 null
   created_at: string;
   updated_at: string;
 }

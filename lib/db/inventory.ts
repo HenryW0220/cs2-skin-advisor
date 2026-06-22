@@ -18,14 +18,14 @@ export function addInventoryItem(
     IInventoryItem,
     "item_name" | "platform" | "buy_price" | "quantity" | "buy_date" | "notes"
   > &
-    Partial<Pick<IInventoryItem, "name_cn" | "icon_url">>
+    Partial<Pick<IInventoryItem, "name_cn" | "icon_url" | "steam_asset_id">>
 ): IInventoryItem {
   const result = getDb()
     .prepare(
-      `INSERT INTO inventory (item_name, name_cn, icon_url, platform, buy_price, quantity, buy_date, notes)
-       VALUES (@item_name, @name_cn, @icon_url, @platform, @buy_price, @quantity, @buy_date, @notes)`
+      `INSERT INTO inventory (item_name, name_cn, icon_url, platform, buy_price, quantity, buy_date, notes, steam_asset_id)
+       VALUES (@item_name, @name_cn, @icon_url, @platform, @buy_price, @quantity, @buy_date, @notes, @steam_asset_id)`
     )
-    .run({ name_cn: null, icon_url: null, ...item });
+    .run({ name_cn: null, icon_url: null, steam_asset_id: null, ...item });
   return getInventoryItem(result.lastInsertRowid as number)!;
 }
 
@@ -66,10 +66,16 @@ export function updateInventoryItem(
   return getInventoryItem(id);
 }
 
-// 同一个 item_name 可以有多条记录（同一个饰品分批买入、价格不一样，每条算一个"批次"/lot），
-// 没有唯一约束。导入 Steam 库存时用这个判断已经记录了多少数量，差额按新批次插入。
+// 同一个 item_name 可以有多条记录（不同批次/不同 Steam asset，价格可能不一样），没有唯一约束。
 export function findInventoryItemsByName(itemName: string): IInventoryItem[] {
   return getDb()
     .prepare("SELECT * FROM inventory WHERE item_name = ?")
     .all(itemName) as IInventoryItem[];
+}
+
+// 按 Steam 真实 asset id 查找，导入时用来判断这个具体物品是不是已经同步过了。
+export function findInventoryItemBySteamAssetId(assetId: string): IInventoryItem | undefined {
+  return getDb()
+    .prepare("SELECT * FROM inventory WHERE steam_asset_id = ?")
+    .get(assetId) as IInventoryItem | undefined;
 }

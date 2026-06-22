@@ -4,6 +4,7 @@ const INVENTORY_BASE_URL = "https://steamcommunity.com/inventory";
 export const STEAM_ICON_BASE_URL = "https://community.fastly.steamstatic.com/economy/image";
 
 interface ISteamAsset {
+  assetid: string;
   classid: string;
   instanceid: string;
   amount: string;
@@ -26,11 +27,14 @@ interface ISteamInventoryResponse {
   descriptions?: ISteamDescription[];
 }
 
+// 一个 ISteamInventoryItem 对应 Steam 库存里一个真实的独立 asset，不按 marketHashName 合并——
+// 同一个饰品买了 28 个，Steam 那边本来就是 28 个独立资产，这里如实返回 28 条。
 export interface ISteamInventoryItem {
+  assetId: string;
   marketHashName: string;
   nameCn: string;
   iconUrl: string;
-  quantity: number;
+  quantity: number; // CS2 饰品基本都是 1，留着是因为 Steam 协议本身允许 amount > 1（堆叠类道具）
   tradable: boolean;
   marketable: boolean;
 }
@@ -41,7 +45,6 @@ interface IResult<T> {
 }
 
 // Steam 的公开库存接口不需要 API_KEY，前提是这个 Steam 账号的库存隐私设置是公开的。
-// 同名饰品（同 marketHashName）会合并数量，跟具体哪个 assetId 没关系。
 export async function getSteamInventory(
   steamId: string,
   appId = 730,
@@ -68,28 +71,23 @@ export async function getSteamInventory(
       json.descriptions.map((d) => [`${d.classid}_${d.instanceid}`, d])
     );
 
-    const grouped = new Map<string, ISteamInventoryItem>();
+    const items: ISteamInventoryItem[] = [];
     for (const asset of json.assets) {
       const desc = descByKey.get(`${asset.classid}_${asset.instanceid}`);
       if (!desc) continue;
 
-      const quantity = Number(asset.amount) || 1;
-      const existing = grouped.get(desc.market_hash_name);
-      if (existing) {
-        existing.quantity += quantity;
-        continue;
-      }
-      grouped.set(desc.market_hash_name, {
+      items.push({
+        assetId: asset.assetid,
         marketHashName: desc.market_hash_name,
         nameCn: desc.market_name,
         iconUrl: desc.icon_url,
-        quantity,
+        quantity: Number(asset.amount) || 1,
         tradable: desc.tradable === 1,
         marketable: desc.marketable === 1,
       });
     }
 
-    return { data: [...grouped.values()] };
+    return { data: items };
   } catch (err) {
     return {
       data: null,
