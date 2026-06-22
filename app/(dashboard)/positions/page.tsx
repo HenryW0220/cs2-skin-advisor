@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { STEAM_ICON_BASE_URL } from "@/lib/api/steam";
 import { listInventory } from "@/lib/db/inventory";
 import { getLatestPricesByPlatform } from "@/lib/db/snapshots";
 import { computeSignalSummary, pickReferencePlatform } from "@/lib/signal-summary";
@@ -34,6 +36,8 @@ function formatMoney(value: number): string {
 interface IPositionRow {
   id: number;
   itemName: string;
+  nameCn: string | null;
+  iconUrl: string | null;
   quantity: number;
   buyPrice: number;
   buyDate: string;
@@ -41,7 +45,15 @@ interface IPositionRow {
   action: ITradeAction | null;
 }
 
-export default async function PositionsPage() {
+export default async function PositionsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ lang?: string }>;
+}) {
+  const { lang } = await searchParams;
+  // 中文名只有 Steam 导入的饰品才有，手动添加的没有，没有的话不管选哪个语言都退回显示英文名。
+  const showEnglish = lang === "en";
+
   const inventory = listInventory();
 
   const rows: IPositionRow[] = inventory.map((item) => {
@@ -54,6 +66,8 @@ export default async function PositionsPage() {
     return {
       id: item.id,
       itemName: item.item_name,
+      nameCn: item.name_cn,
+      iconUrl: item.icon_url,
       quantity: item.quantity,
       buyPrice: item.buy_price,
       buyDate: item.buy_date,
@@ -72,15 +86,31 @@ export default async function PositionsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-3 gap-4">
-        <SummaryCard label="市场价(元)" value={formatMoney(totalMarketValue)} sub={`${rows.length} 件`} />
-        <SummaryCard
-          label="总盈亏(元)"
-          value={`${totalPnl >= 0 ? "+" : ""}${formatMoney(totalPnl)}`}
-          sub={`${totalPnlPercent >= 0 ? "+" : ""}${totalPnlPercent.toFixed(2)}%`}
-          valueClassName={pnlColor(totalPnl)}
-        />
-        <SummaryCard label="购入成本(元)" value={formatMoney(totalCost)} />
+      <div className="flex items-center justify-between">
+        <div className="grid flex-1 grid-cols-3 gap-4">
+          <SummaryCard label="市场价(元)" value={formatMoney(totalMarketValue)} sub={`${rows.length} 件`} />
+          <SummaryCard
+            label="总盈亏(元)"
+            value={`${totalPnl >= 0 ? "+" : ""}${formatMoney(totalPnl)}`}
+            sub={`${totalPnlPercent >= 0 ? "+" : ""}${totalPnlPercent.toFixed(2)}%`}
+            valueClassName={pnlColor(totalPnl)}
+          />
+          <SummaryCard label="购入成本(元)" value={formatMoney(totalCost)} />
+        </div>
+        <div className="ml-4 flex shrink-0 gap-1 rounded-lg border border-neutral-800 p-1 text-xs">
+          <Link
+            href="/positions?lang=zh"
+            className={`rounded px-2 py-1 ${!showEnglish ? "bg-neutral-800 text-neutral-100" : "text-neutral-500"}`}
+          >
+            中文
+          </Link>
+          <Link
+            href="/positions?lang=en"
+            className={`rounded px-2 py-1 ${showEnglish ? "bg-neutral-800 text-neutral-100" : "text-neutral-500"}`}
+          >
+            EN
+          </Link>
+        </div>
       </div>
 
       <div className="overflow-hidden rounded-lg border border-neutral-800">
@@ -103,11 +133,28 @@ export default async function PositionsPage() {
                 row.marketPrice !== null && row.buyPrice > 0
                   ? ((row.marketPrice - row.buyPrice) / row.buyPrice) * 100
                   : null;
+              const displayName = (showEnglish ? null : row.nameCn) ?? row.itemName;
               return (
                 <tr key={row.id} className="hover:bg-neutral-900/60">
                   <td className="px-4 py-3">
-                    <div className="font-medium">{row.itemName}</div>
-                    <div className="text-xs text-neutral-500">x{row.quantity}</div>
+                    <div className="flex items-center gap-3">
+                      {row.iconUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element -- 外部 Steam CDN 图片，没配 next/image 的 remotePatterns
+                        <img
+                          src={`${STEAM_ICON_BASE_URL}/${row.iconUrl}`}
+                          alt={displayName}
+                          width={40}
+                          height={40}
+                          className="size-10 shrink-0 rounded bg-neutral-800 object-contain"
+                        />
+                      ) : (
+                        <div className="size-10 shrink-0 rounded bg-neutral-800" />
+                      )}
+                      <div>
+                        <div className="font-medium">{displayName}</div>
+                        <div className="text-xs text-neutral-500">x{row.quantity}</div>
+                      </div>
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-right">
                     {row.marketPrice !== null ? `¥${formatMoney(row.marketPrice)}` : "暂无数据"}

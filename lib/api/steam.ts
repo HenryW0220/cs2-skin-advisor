@@ -1,5 +1,8 @@
 const INVENTORY_BASE_URL = "https://steamcommunity.com/inventory";
 
+// 拼图标 URL 用：community/economy/image/{icon_url} 才是完整地址。
+export const STEAM_ICON_BASE_URL = "https://community.fastly.steamstatic.com/economy/image";
+
 interface ISteamAsset {
   classid: string;
   instanceid: string;
@@ -10,7 +13,7 @@ interface ISteamDescription {
   classid: string;
   instanceid: string;
   market_hash_name: string;
-  name: string;
+  market_name: string; // 中文（或 l= 指定的语言）显示名，带磨损后缀，跟 market_hash_name 格式对应
   icon_url: string;
   tradable: number;
   marketable: number;
@@ -25,7 +28,7 @@ interface ISteamInventoryResponse {
 
 export interface ISteamInventoryItem {
   marketHashName: string;
-  name: string;
+  nameCn: string;
   iconUrl: string;
   quantity: number;
   tradable: boolean;
@@ -78,7 +81,7 @@ export async function getSteamInventory(
       }
       grouped.set(desc.market_hash_name, {
         marketHashName: desc.market_hash_name,
-        name: desc.name,
+        nameCn: desc.market_name,
         iconUrl: desc.icon_url,
         quantity,
         tradable: desc.tradable === 1,

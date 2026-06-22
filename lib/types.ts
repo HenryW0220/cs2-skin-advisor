@@ -1,6 +1,8 @@
 export interface IInventoryItem {
   id: number;
-  item_name: string;
+  item_name: string; // 英文 market_hash_name，跨 SteamDT/C5 查价用的 key，不直接展示给用户
+  name_cn: string | null; // 中文显示名，Steam 导入才有，手动添加的持仓是 null
+  icon_url: string | null; // Steam 图标 CDN 路径片段，要拼 https://community.fastly.steamstatic.com/economy/image/ 前缀才能用
   platform: "steam" | "c5";
   buy_price: number;
   quantity: number;

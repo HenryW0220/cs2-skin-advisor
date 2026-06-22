@@ -17,14 +17,15 @@ export function addInventoryItem(
   item: Pick<
     IInventoryItem,
     "item_name" | "platform" | "buy_price" | "quantity" | "buy_date" | "notes"
-  >
+  > &
+    Partial<Pick<IInventoryItem, "name_cn" | "icon_url">>
 ): IInventoryItem {
   const result = getDb()
     .prepare(
-      `INSERT INTO inventory (item_name, platform, buy_price, quantity, buy_date, notes)
-       VALUES (@item_name, @platform, @buy_price, @quantity, @buy_date, @notes)`
+      `INSERT INTO inventory (item_name, name_cn, icon_url, platform, buy_price, quantity, buy_date, notes)
+       VALUES (@item_name, @name_cn, @icon_url, @platform, @buy_price, @quantity, @buy_date, @notes)`
     )
-    .run(item);
+    .run({ name_cn: null, icon_url: null, ...item });
   return getInventoryItem(result.lastInsertRowid as number)!;
 }
 
@@ -34,7 +35,9 @@ export function deleteInventoryItem(id: number): void {
 
 export function updateInventoryItem(
   id: number,
-  fields: Partial<Pick<IInventoryItem, "buy_price" | "quantity" | "buy_date" | "notes">>
+  fields: Partial<
+    Pick<IInventoryItem, "buy_price" | "quantity" | "buy_date" | "notes" | "name_cn" | "icon_url">
+  >
 ): IInventoryItem | undefined {
   const current = getInventoryItem(id);
   if (!current) return undefined;
@@ -48,7 +51,7 @@ export function updateInventoryItem(
     .prepare(
       `UPDATE inventory
        SET buy_price = @buy_price, quantity = @quantity, buy_date = @buy_date,
-           notes = @notes, updated_at = datetime('now')
+           notes = @notes, name_cn = @name_cn, icon_url = @icon_url, updated_at = datetime('now')
        WHERE id = @id`
     )
     .run({
@@ -57,6 +60,8 @@ export function updateInventoryItem(
       quantity: next.quantity,
       buy_date: next.buy_date,
       notes: next.notes,
+      name_cn: next.name_cn,
+      icon_url: next.icon_url,
     });
   return getInventoryItem(id);
 }
