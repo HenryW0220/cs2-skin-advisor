@@ -166,7 +166,7 @@ refactor(ui): 拆分 InventoryTable 为子组件
    - [x] 跨平台价差计算（C5 vs Steam）
 
 3. **Phase 3 — LLM 理由生成**
-   - [x] NVIDIA NIM API 封装（model id 是占位值，没有真实 key 没法端到端验证，拿到 key 后要确认）
+   - [x] NVIDIA NIM API 封装（用真实 key 实测确认 deepseek-ai/deepseek-v4-flash 可用且免费）
    - [x] 把信号 prompt 化，生成中文建议理由
    - [x] 理由缓存（落库 reason_cache 表，按饰品+action+score+日期做 key）
 
