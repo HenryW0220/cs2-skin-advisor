@@ -125,7 +125,11 @@ STEAMDT_API_BASE_URL=https://open.steamdt.com
 # NVIDIA NIM（免费 LLM）
 NVIDIA_API_KEY=
 NVIDIA_API_BASE_URL=https://integrate.api.nvidia.com/v1
-NVIDIA_MODEL=meta/llama-3.1-8b-instruct
+NVIDIA_MODEL=deepseek-ai/deepseek-v4-flash
+
+# Steam 官方 Web API（用来导入库存，库存接口本身不需要 key，只在确认账号身份时用到 ResolveVanityURL）
+STEAM_API_KEY=
+STEAM_USER_ID=
 
 # 开发模式
 USE_MOCK=false
@@ -159,6 +163,7 @@ refactor(ui): 拆分 InventoryTable 为子组件
    - [x] SteamDT API 封装（单品价格、批量价格、K线、7天均价）
    - [x] C5 API 封装（库存列表、卖家订单列表、价格查询）
    - [x] 数据刷新策略：手动触发 `POST /api/sync`，遍历持仓+观察池里的饰品拉取价格并写入 price_snapshots
+   - [x] Steam 官方库存自动导入（`POST /api/inventory/import-steam`，按 marketHashName 去重，成本价未知先填 0，需要手动 PATCH 改成真实购入价）
 
 2. **Phase 2 — 信号与规则**
    - [x] 技术指标计算（MA7/30、RSI14、成交量异常）
