@@ -78,6 +78,18 @@ interface IPositionRow {
   editable: boolean; // 合并后的购入价是加权平均，编辑没有意义，只在展开（单批次）时能改
 }
 
+// 不合并的展开视图下，同名饰品（同一批 Steam 导入的多个 asset）也不应该被
+// created_at 排序拆散到列表各处——把同名的排到一起，但每行还是独立可编辑的。
+function groupAdjacentByItemName(rows: IPositionRow[]): IPositionRow[] {
+  const groups = new Map<string, IPositionRow[]>();
+  for (const row of rows) {
+    const list = groups.get(row.itemName) ?? [];
+    list.push(row);
+    groups.set(row.itemName, list);
+  }
+  return [...groups.values()].flat();
+}
+
 // 同一个 item_name 的多个批次（分开几次买、价格不同）合并成一行，购入价按数量加权平均，
 // 持有天数按最早那一批算（持有时间最长的那笔最有参考意义）。
 function mergeByItemName(rows: IPositionRow[]): IPositionRow[] {
@@ -166,9 +178,7 @@ export default async function PositionsPage({
     };
   });
 
-  if (merged) {
-    rows = mergeByItemName(rows);
-  }
+  rows = merged ? mergeByItemName(rows) : groupAdjacentByItemName(rows);
 
   if (query) {
     rows = rows.filter(
