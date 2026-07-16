@@ -28,6 +28,8 @@ export interface IPriceSnapshot {
 export interface IWatchlistItem {
   id: number;
   item_name: string;
+  name_cn: string | null; // 加入观察池时查 Steam 市场搜索接口顺带存的，查不到就是 null
+  icon_url: string | null;
   target_buy_price: number | null;
   target_sell_price: number | null;
   notes: string | null;

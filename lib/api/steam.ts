@@ -44,6 +44,86 @@ interface IResult<T> {
   error?: string;
 }
 
+interface ISteamMarketSearchResult {
+  name: string; // 本地化展示名（受 l= 参数影响），不是 market_hash_name
+  asset_description: {
+    icon_url: string;
+    market_hash_name: string;
+  };
+}
+
+interface ISteamMarketSearchResponse {
+  success: boolean;
+  results?: ISteamMarketSearchResult[];
+}
+
+export interface ISteamMarketLookup {
+  nameCn: string;
+  iconUrl: string;
+}
+
+export interface ISteamMarketSearchItem {
+  marketHashName: string; // 英文全名，给价格接口和入库用的 key
+  nameCn: string;
+  iconUrl: string;
+}
+
+async function fetchMarketSearchResults(
+  query: string
+): Promise<IResult<ISteamMarketSearchResult[]>> {
+  try {
+    const url = `https://steamcommunity.com/market/search/render/?query=${encodeURIComponent(
+      query
+    )}&appid=730&norender=1&l=schinese`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      return { data: null, error: `Steam 市场搜索接口返回 HTTP ${res.status}` };
+    }
+
+    const json = (await res.json()) as ISteamMarketSearchResponse;
+    return { data: json.results ?? [] };
+  } catch (err) {
+    return {
+      data: null,
+      error: `Steam 市场搜索请求失败: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+// 观察池里的饰品通常不在用户自己的库存里，没法靠库存导入顺带拿图标/中文名，
+// 用 Steam 市场的公开搜索接口（不需要 key）按 market_hash_name 精确匹配查一次。
+// 搜索是模糊匹配，可能返回好几个相近结果（普通/StatTrak/纪念品），必须按
+// asset_description.market_hash_name 精确比对，不能直接拿第一条。
+export async function lookupSteamMarketItem(
+  marketHashName: string
+): Promise<IResult<ISteamMarketLookup>> {
+  const result = await fetchMarketSearchResults(marketHashName);
+  if (result.error || !result.data) return { data: null, error: result.error };
+
+  const match = result.data.find((r) => r.asset_description.market_hash_name === marketHashName);
+  if (!match) {
+    return { data: null, error: "Steam 市场搜索没找到精确匹配的饰品名" };
+  }
+  return { data: { nameCn: match.name, iconUrl: match.asset_description.icon_url } };
+}
+
+// 给加入观察池的搜索框用：支持中文/英文模糊查询，返回的每一条都带着真实的
+// market_hash_name，用户从列表里选一条就不会再有名字/磨损度打错的问题。
+export async function searchSteamMarketItems(
+  query: string
+): Promise<IResult<ISteamMarketSearchItem[]>> {
+  const result = await fetchMarketSearchResults(query);
+  if (result.error || !result.data) return { data: null, error: result.error };
+
+  return {
+    data: result.data.map((r) => ({
+      marketHashName: r.asset_description.market_hash_name,
+      nameCn: r.name,
+      iconUrl: r.asset_description.icon_url,
+    })),
+  };
+}
+
 // Steam 的公开库存接口不需要 API_KEY，前提是这个 Steam 账号的库存隐私设置是公开的。
 export async function getSteamInventory(
   steamId: string,
