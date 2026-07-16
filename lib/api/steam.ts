@@ -69,12 +69,13 @@ export interface ISteamMarketSearchItem {
 }
 
 async function fetchMarketSearchResults(
-  query: string
+  query: string,
+  start = 0
 ): Promise<IResult<ISteamMarketSearchResult[]>> {
   try {
     const url = `https://steamcommunity.com/market/search/render/?query=${encodeURIComponent(
       query
-    )}&appid=730&norender=1&l=schinese`;
+    )}&appid=730&norender=1&l=schinese&start=${start}`;
     const res = await fetch(url);
     if (!res.ok) {
       return { data: null, error: `Steam 市场搜索接口返回 HTTP ${res.status}` };
@@ -90,21 +91,39 @@ async function fetchMarketSearchResults(
   }
 }
 
+// 完整 market_hash_name 里的 "|"、括号磨损后缀会污染 Steam 搜索的相关性排序
+// （实测：带全名搜"夜愿 崭新出厂"排不进前 10，去掉后缀只搜"AK-47 Nightwish"
+// 就排第 5），所以查询词去掉磨损括号和特殊符号，精确比对留到拿到结果之后做。
+function toSearchQuery(marketHashName: string): string {
+  return marketHashName
+    .replace(/\s*\((Factory New|Minimal Wear|Field-Tested|Well-Worn|Battle-Scarred)\)\s*$/i, "")
+    .replace(/[|™★]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 // 观察池里的饰品通常不在用户自己的库存里，没法靠库存导入顺带拿图标/中文名，
 // 用 Steam 市场的公开搜索接口（不需要 key）按 market_hash_name 精确匹配查一次。
-// 搜索是模糊匹配，可能返回好几个相近结果（普通/StatTrak/纪念品），必须按
-// asset_description.market_hash_name 精确比对，不能直接拿第一条。
+// 搜索是模糊匹配且每页固定 10 条（count 参数实测被忽略），普通/StatTrak/纪念品
+// 变体多的饰品精确匹配可能掉到第二页，最多翻两页。
 export async function lookupSteamMarketItem(
   marketHashName: string
 ): Promise<IResult<ISteamMarketLookup>> {
-  const result = await fetchMarketSearchResults(marketHashName);
-  if (result.error || !result.data) return { data: null, error: result.error };
+  const query = toSearchQuery(marketHashName);
 
-  const match = result.data.find((r) => r.asset_description.market_hash_name === marketHashName);
-  if (!match) {
-    return { data: null, error: "Steam 市场搜索没找到精确匹配的饰品名" };
+  for (const start of [0, 10]) {
+    const result = await fetchMarketSearchResults(query, start);
+    if (result.error || !result.data) return { data: null, error: result.error };
+
+    const match = result.data.find((r) => r.asset_description.market_hash_name === marketHashName);
+    if (match) {
+      return { data: { nameCn: match.name, iconUrl: match.asset_description.icon_url } };
+    }
+    // 不满一页说明后面没有了，翻页也不会有结果
+    if (result.data.length < 10) break;
   }
-  return { data: { nameCn: match.name, iconUrl: match.asset_description.icon_url } };
+
+  return { data: null, error: "Steam 市场搜索没找到精确匹配的饰品名" };
 }
 
 // 给加入观察池的搜索框用：支持中文/英文模糊查询，返回的每一条都带着真实的
