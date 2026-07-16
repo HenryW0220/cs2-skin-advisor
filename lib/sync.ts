@@ -35,13 +35,13 @@ export async function syncPriceSnapshots(): Promise<ISyncSummary> {
     return { itemCount: 0, snapshotCount: 0, errors: [] };
   }
 
+  // getBatchPrice 分块请求时可能部分成功（比如第二块被限流），data 和 error 会同时有值：
+  // 先把拿到的都写进去，再把没出现在返回里的饰品记为错误。
   const steamDtResult = await getBatchPrice(itemNames);
-  if (steamDtResult.error || !steamDtResult.data) {
-    for (const itemName of itemNames) {
-      errors.push({ itemName, source: "steamdt", error: steamDtResult.error ?? "无数据" });
-    }
-  } else {
+  const steamDtReturned = new Set<string>();
+  if (steamDtResult.data) {
     for (const item of steamDtResult.data) {
+      steamDtReturned.add(item.marketHashName);
       for (const platformPrice of item.dataList) {
         insertPriceSnapshot({
           item_name: item.marketHashName,
@@ -53,6 +53,13 @@ export async function syncPriceSnapshots(): Promise<ISyncSummary> {
             : capturedAt,
         });
         snapshotCount += 1;
+      }
+    }
+  }
+  if (steamDtResult.error) {
+    for (const itemName of itemNames) {
+      if (!steamDtReturned.has(itemName)) {
+        errors.push({ itemName, source: "steamdt", error: steamDtResult.error });
       }
     }
   }

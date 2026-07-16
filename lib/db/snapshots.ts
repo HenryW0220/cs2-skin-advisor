@@ -41,6 +41,14 @@ export function getPriceHistory(
     .all(itemName, platform) as IPriceSnapshot[];
 }
 
+// 全表最新一条快照的时间，给定时同步判断"距离上次同步过了多久"用；一条都没有时返回 null。
+export function getLatestSnapshotTime(): string | null {
+  const row = getDb()
+    .prepare("SELECT MAX(created_at) AS latest FROM price_snapshots")
+    .get() as { latest: string | null };
+  return row.latest;
+}
+
 // 同一个饰品在各平台最新的一条价格快照，每个 platform 只取 captured_at 最大的那条，
 // 用于跨平台价差计算。
 export function getLatestPricesByPlatform(itemName: string): IPriceSnapshot[] {
