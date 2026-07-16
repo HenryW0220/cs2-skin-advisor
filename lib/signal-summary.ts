@@ -89,10 +89,20 @@ export function computeSignalSummary(
   return { itemName, platform, signals, rule, crossPlatformSpread, recentPrices, changeToday };
 }
 
-// 持仓/观察池页面展示"市场价"用哪个平台的数据：优先用我们直连 C5 拿到的价格
-// （目前最稳定的数据源），没有的话退而求其次用最新同步到的任意平台价格。
+// 持仓/观察池页面展示"市场价"用哪个平台的数据，按国内玩家实际交易习惯排优先级：
+// C5（直连数据源，最稳定）> BUFF > 悠悠有品 > 其他，STEAM 永远垫底——Steam 余额
+// 有提现折损，标价虚高，不能代表真实能成交的行情价。
+const PLATFORM_PRIORITY = ["C5", "BUFF", "YOUPIN"];
+
 export function pickReferencePlatform(itemName: string): string | null {
-  const latest = getLatestPricesByPlatform(itemName);
-  if (latest.length === 0) return null;
-  return latest.find((p) => p.platform === "C5")?.platform ?? latest[0].platform;
+  // 价格为 0 的是没挂单/接口没覆盖的死数据（CSMONEY/DMARKET 常见），直接排除。
+  const candidates = getLatestPricesByPlatform(itemName).filter((p) => p.price > 0);
+  if (candidates.length === 0) return null;
+
+  for (const preferred of PLATFORM_PRIORITY) {
+    const hit = candidates.find((p) => p.platform === preferred);
+    if (hit) return hit.platform;
+  }
+  const nonSteam = candidates.find((p) => p.platform !== "STEAM");
+  return (nonSteam ?? candidates[0]).platform;
 }
