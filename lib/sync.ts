@@ -1,5 +1,6 @@
 import { getProductPrices } from "./api/c5";
 import { getBatchPrice } from "./api/steamdt";
+import { scanForAnomalies } from "./anomaly-scan";
 import { listInventory } from "./db/inventory";
 import { insertPriceSnapshot } from "./db/snapshots";
 import { listWatchlist } from "./db/watchlist";
@@ -14,6 +15,7 @@ export interface ISyncSummary {
   itemCount: number;
   snapshotCount: number;
   errors: ISyncError[];
+  anomaliesDetected: number;
 }
 
 function getTrackedItemNames(): string[] {
@@ -32,7 +34,7 @@ export async function syncPriceSnapshots(): Promise<ISyncSummary> {
   const errors: ISyncError[] = [];
 
   if (itemNames.length === 0) {
-    return { itemCount: 0, snapshotCount: 0, errors: [] };
+    return { itemCount: 0, snapshotCount: 0, errors: [], anomaliesDetected: 0 };
   }
 
   // getBatchPrice 分块请求时可能部分成功（比如第二块被限流），data 和 error 会同时有值：
@@ -88,5 +90,9 @@ export async function syncPriceSnapshots(): Promise<ISyncSummary> {
     }
   }
 
-  return { itemCount: itemNames.length, snapshotCount, errors };
+  // 价格写完再扫异常：z-score/成交量基线都是从 price_snapshots 里查历史算的，
+  // 得先看到这一轮刚写入的最新快照才能判断"最新一期"正不正常。
+  const { eventsCreated } = scanForAnomalies();
+
+  return { itemCount: itemNames.length, snapshotCount, errors, anomaliesDetected: eventsCreated };
 }

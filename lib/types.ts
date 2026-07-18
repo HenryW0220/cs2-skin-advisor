@@ -25,6 +25,51 @@ export interface IPriceSnapshot {
   created_at: string;
 }
 
+export type IAnomalyMetric = "price_zscore" | "volume_ratio";
+// confirmed=确认操盘（正样本）；external=外部事件驱动的真实行情（版本更新/炼金开放/
+// 大赛等，困难负样本，review_note 记录具体事件）；dismissed=正常波动（普通负样本）。
+export type IAnomalyStatus = "pending" | "confirmed" | "external" | "dismissed";
+
+// 自动异常检测（无需标签）产生的候选事件，见 db/migrations/007_add_anomaly_events.sql。
+export interface IAnomalyEvent {
+  id: number;
+  item_name: string;
+  platform: string;
+  metric: IAnomalyMetric;
+  detected_at: string;
+  value: number;
+  price: number;
+  status: IAnomalyStatus;
+  review_note: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+}
+
+// 饰品结构资料（收藏品/箱子/品质），同系列联动分析用，见 db/migrations/009_add_item_metadata.sql。
+export interface IItemMetadata {
+  id: number;
+  item_name: string;
+  collection: string | null;
+  crate: string | null;
+  rarity: string | null;
+  rarity_rank: number | null;
+  updated_at: string;
+}
+
+export type IManipulationConfidence = "high" | "medium" | "low";
+
+// 用户凭小道消息标记的"操盘时间窗口"，是将来训练操盘检测模型的正样本标签，
+// 也直接喂给规则引擎/LLM 做决策参考——见 db/migrations/006_add_manipulation_tags.sql。
+export interface IManipulationTag {
+  id: number;
+  item_name: string;
+  start_date: string;
+  end_date: string | null;
+  confidence: IManipulationConfidence;
+  note: string | null;
+  created_at: string;
+}
+
 export interface IWatchlistItem {
   id: number;
   item_name: string;
@@ -142,5 +187,7 @@ export interface ISteamDTAvgPrice {
   dataList: ISteamDTAvgPriceEntry[];
 }
 
-// K线每行实测是 [时间戳字符串, open, high, low, close]，没有成交量字段，时间戳是字符串不是数字。
+// K线每行实测是 [unix秒级时间戳(字符串), open, high, low, close]，没有成交量字段。
+// type=1 实测不是"日线"而是滚动最近 90 天的整点小时线（固定 2160 = 90*24 条），
+// 文档写的"日线"跟实测行为对不上，先按实测的来。
 export type ISteamDTKlinePoint = [string, number, number, number, number];

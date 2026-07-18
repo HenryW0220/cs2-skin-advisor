@@ -4,6 +4,10 @@ import {
   computeCrossPlatformSpread,
   type ICrossPlatformSpread,
 } from "./signals/cross-platform";
+import {
+  computeManipulationScore,
+  type IManipulationScoreResult,
+} from "./signals/manipulation-score";
 import { movingAverage } from "./signals/moving-average";
 import { rsi } from "./signals/rsi";
 import { detectVolumeAnomaly } from "./signals/volume";
@@ -22,6 +26,7 @@ export interface ISignalSummary {
   crossPlatformSpread: ICrossPlatformSpread | null;
   recentPrices: number[]; // 近 7 天内的快照价格，按时间升序，给走势图用
   changeToday: IPriceChange | null; // 跟 24 小时前最近的一条快照比,数据不够时是 null
+  manipulation: IManipulationScoreResult | null; // 操盘嫌疑分，历史数据不足 8 天时是 null
 }
 
 function findSnapshotAtOrBefore(
@@ -86,7 +91,16 @@ export function computeSignalSummary(
       }
     : null;
 
-  return { itemName, platform, signals, rule, crossPlatformSpread, recentPrices, changeToday };
+  return {
+    itemName,
+    platform,
+    signals,
+    rule,
+    crossPlatformSpread,
+    recentPrices,
+    changeToday,
+    manipulation: computeManipulationScore(prices),
+  };
 }
 
 // 持仓/观察池页面展示"市场价"用哪个平台的数据，按国内玩家实际交易习惯排优先级：
