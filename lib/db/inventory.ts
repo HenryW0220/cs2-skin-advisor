@@ -79,3 +79,11 @@ export function findInventoryItemBySteamAssetId(assetId: string): IInventoryItem
     .prepare("SELECT * FROM inventory WHERE steam_asset_id = ?")
     .get(assetId) as IInventoryItem | undefined;
 }
+
+// Steam 导入的行（steam_asset_id 非空），同步时拿来对比最新库存、找出已卖出/转移的资产。
+// 手动添加的持仓（steam_asset_id 为 null）不在此列，永远不会被自动清理。
+export function listSteamLinkedInventory(): IInventoryItem[] {
+  return getDb()
+    .prepare("SELECT * FROM inventory WHERE steam_asset_id IS NOT NULL")
+    .all() as IInventoryItem[];
+}

@@ -25,6 +25,8 @@ interface ISteamInventoryResponse {
   total_inventory_count?: number;
   assets?: ISteamAsset[];
   descriptions?: ISteamDescription[];
+  more_items?: number; // 还有下一页时是 1，配合 last_assetid 翻页
+  last_assetid?: string;
 }
 
 // 一个 ISteamInventoryItem 对应 Steam 库存里一个真实的独立 asset，不按 marketHashName 合并——
@@ -144,46 +146,61 @@ export async function searchSteamMarketItems(
 }
 
 // Steam 的公开库存接口不需要 API_KEY，前提是这个 Steam 账号的库存隐私设置是公开的。
+// 超过 2000 件会按 last_assetid 翻页拉全量；任何一页失败都整体返回 error 而不是半份列表——
+// 调用方（库存同步）会按"不在列表里=已卖出"做删除，半份列表会导致误删。
 export async function getSteamInventory(
   steamId: string,
   appId = 730,
   contextId = 2
 ): Promise<IResult<ISteamInventoryItem[]>> {
   try {
-    // count 上限是 2000，传更大的值 Steam 直接返回 400（实测确认），不是简单地截断。
-    const url = `${INVENTORY_BASE_URL}/${steamId}/${appId}/${contextId}?l=schinese&count=2000`;
-    const res = await fetch(url);
-
-    if (res.status === 403) {
-      return { data: null, error: "Steam 库存接口返回 403，库存隐私设置可能是私密的" };
-    }
-    if (!res.ok) {
-      return { data: null, error: `Steam 库存接口返回 HTTP ${res.status}` };
-    }
-
-    const json = (await res.json()) as ISteamInventoryResponse;
-    if (!json.success || !json.assets || !json.descriptions) {
-      return { data: null, error: "Steam 库存返回为空，可能是私密库存或者账号没有 CS2 物品" };
-    }
-
-    const descByKey = new Map(
-      json.descriptions.map((d) => [`${d.classid}_${d.instanceid}`, d])
-    );
-
     const items: ISteamInventoryItem[] = [];
-    for (const asset of json.assets) {
-      const desc = descByKey.get(`${asset.classid}_${asset.instanceid}`);
-      if (!desc) continue;
+    let startAssetId: string | undefined;
 
-      items.push({
-        assetId: asset.assetid,
-        marketHashName: desc.market_hash_name,
-        nameCn: desc.market_name,
-        iconUrl: desc.icon_url,
-        quantity: Number(asset.amount) || 1,
-        tradable: desc.tradable === 1,
-        marketable: desc.marketable === 1,
-      });
+    // 10 页 = 2 万件，超出正常玩家库存上限；防御 Steam 返回异常的 more_items 导致死循环
+    for (let page = 0; page < 10; page++) {
+      // count 上限是 2000，传更大的值 Steam 直接返回 400（实测确认），不是简单地截断。
+      const url =
+        `${INVENTORY_BASE_URL}/${steamId}/${appId}/${contextId}?l=schinese&count=2000` +
+        (startAssetId ? `&start_assetid=${startAssetId}` : "");
+      const res = await fetch(url);
+
+      if (res.status === 403) {
+        return { data: null, error: "Steam 库存接口返回 403，库存隐私设置可能是私密的" };
+      }
+      if (!res.ok) {
+        return { data: null, error: `Steam 库存接口返回 HTTP ${res.status}` };
+      }
+
+      const json = (await res.json()) as ISteamInventoryResponse;
+      if (!json.success || !json.assets || !json.descriptions) {
+        if (page === 0) {
+          return { data: null, error: "Steam 库存返回为空，可能是私密库存或者账号没有 CS2 物品" };
+        }
+        break;
+      }
+
+      const descByKey = new Map(
+        json.descriptions.map((d) => [`${d.classid}_${d.instanceid}`, d])
+      );
+
+      for (const asset of json.assets) {
+        const desc = descByKey.get(`${asset.classid}_${asset.instanceid}`);
+        if (!desc) continue;
+
+        items.push({
+          assetId: asset.assetid,
+          marketHashName: desc.market_hash_name,
+          nameCn: desc.market_name,
+          iconUrl: desc.icon_url,
+          quantity: Number(asset.amount) || 1,
+          tradable: desc.tradable === 1,
+          marketable: desc.marketable === 1,
+        });
+      }
+
+      if (!json.more_items || !json.last_assetid) break;
+      startAssetId = json.last_assetid;
     }
 
     return { data: items };
