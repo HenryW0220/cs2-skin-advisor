@@ -236,6 +236,11 @@ export default async function PositionsPage({
     rows = [...withValue, ...withoutValue];
   }
 
+  // 没填购入价的（开箱所得）整体沉底：真金白银买入的持仓才是用户优先要盯的，
+  // 排序只在"有购入价"和"没购入价"两组内部各自生效。
+  const hasCost = (row: IPositionRow) => row.buyPrice !== null && row.buyPrice > 0;
+  rows = [...rows.filter(hasCost), ...rows.filter((row) => !hasCost(row))];
+
   // 汇总口径：市值算所有饰品；成本和盈亏只算填了购入价的（开箱获得的成本未知，
   // 算进去会把整个市场价当利润，总盈亏会虚高）。
   let totalMarketValue = 0;
