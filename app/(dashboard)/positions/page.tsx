@@ -3,16 +3,13 @@ import { AiInsight } from "@/components/features/ai-insight";
 import { BackfillAnomalyScanButton } from "@/components/features/backfill-anomaly-scan-button";
 import { BackfillKlineButton } from "@/components/features/backfill-kline-button";
 import { EditableBuyPrice } from "@/components/features/editable-buy-price";
-import { ManipulationTagPanel } from "@/components/features/manipulation-tag-panel";
 import { RefreshInventoryButton } from "@/components/features/refresh-inventory-button";
 import { Sparkline } from "@/components/ui/sparkline";
 import { STEAM_ICON_BASE_URL } from "@/lib/api/steam";
 import { listInventory } from "@/lib/db/inventory";
-import { listManipulationTags } from "@/lib/db/manipulation-tags";
 import { getLatestPricesByPlatform } from "@/lib/db/snapshots";
 import { computeSignalSummary, pickReferencePlatform } from "@/lib/signal-summary";
 import type { ITradeAction } from "@/lib/rules/evaluate";
-import type { IManipulationTag } from "@/lib/types";
 
 // 跟着 C5GAME/SteamDT 的习惯走：涨=红，跌=绿（国内行情软件的配色，跟欧美的红跌绿涨反过来）。
 function pnlColor(value: number): string {
@@ -83,7 +80,6 @@ interface IPositionRow {
   changeTodayPercent: number | null;
   recentPrices: number[];
   editable: boolean; // 合并后的购入价是加权平均，编辑没有意义，只在展开（单批次）时能改
-  manipulationTags: IManipulationTag[];
 }
 
 // 不合并的展开视图下，同名饰品（同一批 Steam 导入的多个 asset）也不应该被
@@ -141,7 +137,6 @@ function mergeByItemName(rows: IPositionRow[]): IPositionRow[] {
       changeTodayPercent: group[0].changeTodayPercent,
       recentPrices: group[0].recentPrices,
       editable: false,
-      manipulationTags: group[0].manipulationTags,
     };
   });
 }
@@ -159,13 +154,6 @@ export default async function PositionsPage({
   const sortDir = sp.sortDir === "asc" ? "asc" : "desc";
 
   const inventory = listInventory();
-
-  const tagsByItemName = new Map<string, IManipulationTag[]>();
-  for (const tag of listManipulationTags()) {
-    const list = tagsByItemName.get(tag.item_name) ?? [];
-    list.push(tag);
-    tagsByItemName.set(tag.item_name, list);
-  }
 
   let rows: IPositionRow[] = inventory.map((item) => {
     const platform = pickReferencePlatform(item.item_name);
@@ -199,7 +187,6 @@ export default async function PositionsPage({
       changeTodayPercent: summary?.changeToday?.percent ?? null,
       recentPrices: summary?.recentPrices ?? [],
       editable: true,
-      manipulationTags: tagsByItemName.get(item.item_name) ?? [],
     };
   });
 
@@ -371,7 +358,6 @@ export default async function PositionsPage({
               <th className="px-4 py-3 text-center">近7天走势</th>
               <th className="px-4 py-3 text-center">建议</th>
               <th className="px-4 py-3 text-left">AI 建议</th>
-              <th className="px-4 py-3 text-left">操盘标记</th>
               <th className="px-4 py-3 text-right">
                 <Link href={sortLink("days")}>持有天数{sortArrow("days")}</Link>
               </th>
@@ -463,12 +449,6 @@ export default async function PositionsPage({
                       <span className="text-xs text-neutral-500">暂无数据</span>
                     )}
                   </td>
-                  <td className="px-4 py-3">
-                    <ManipulationTagPanel
-                      itemName={row.itemName}
-                      initialTags={row.manipulationTags}
-                    />
-                  </td>
                   <td className="px-4 py-3 text-right text-neutral-400">
                     {holdingDays(row.buyDate)} 天
                   </td>
@@ -477,7 +457,7 @@ export default async function PositionsPage({
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={11} className="px-4 py-10 text-center text-neutral-500">
+                <td colSpan={10} className="px-4 py-10 text-center text-neutral-500">
                   {inventory.length === 0
                     ? "还没有持仓，先点右上角刷新库存或调用 POST /api/inventory 添加"
                     : "没有匹配的饰品"}
