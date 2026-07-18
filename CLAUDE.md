@@ -176,9 +176,9 @@ refactor(ui): 拆分 InventoryTable 为子组件
    - [x] 理由缓存（落库 reason_cache 表，按饰品+action+score+日期做 key）
 
 4. **Phase 4 — Dashboard UI**
-   - [ ] 持仓总览页（/positions）
-   - [ ] 观察池页（/watchlist）
-   - [ ] 饰品详情页（价格走势图）
+   - [x] 持仓总览页（/positions）
+   - [x] 观察池页（/watchlist）
+   - [x] 饰品详情页（/item/[name]，价格走势图 + 信号卡片 + 各平台报价对比，持仓/观察池点饰品名进入）
 
 5. **Phase 5 — 多用户支持**（公开给他人用时再做）
    - [ ] 用户认证

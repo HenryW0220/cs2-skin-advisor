@@ -1,13 +1,18 @@
 import Link from "next/link";
 import { AiInsight } from "@/components/features/ai-insight";
+import { BackfillAnomalyScanButton } from "@/components/features/backfill-anomaly-scan-button";
+import { BackfillKlineButton } from "@/components/features/backfill-kline-button";
 import { EditableBuyPrice } from "@/components/features/editable-buy-price";
+import { ManipulationTagPanel } from "@/components/features/manipulation-tag-panel";
 import { RefreshInventoryButton } from "@/components/features/refresh-inventory-button";
 import { Sparkline } from "@/components/ui/sparkline";
 import { STEAM_ICON_BASE_URL } from "@/lib/api/steam";
 import { listInventory } from "@/lib/db/inventory";
+import { listManipulationTags } from "@/lib/db/manipulation-tags";
 import { getLatestPricesByPlatform } from "@/lib/db/snapshots";
 import { computeSignalSummary, pickReferencePlatform } from "@/lib/signal-summary";
 import type { ITradeAction } from "@/lib/rules/evaluate";
+import type { IManipulationTag } from "@/lib/types";
 
 // 跟着 C5GAME/SteamDT 的习惯走：涨=红，跌=绿（国内行情软件的配色，跟欧美的红跌绿涨反过来）。
 function pnlColor(value: number): string {
@@ -66,7 +71,9 @@ interface IPositionRow {
   nameCn: string | null;
   iconUrl: string | null;
   quantity: number;
-  buyPrice: number; // 多批次合并时是加权平均价
+  // 多批次合并时是已填价批次的加权平均；null 表示合并组里没有任何已填价的批次。
+  // 单批次的 0 表示"没填购入价"（自己开箱获得），这种不算盈亏但保留市场价展示。
+  buyPrice: number | null;
   buyDate: string; // 多批次合并时取最早一批的购入日
   marketPrice: number | null;
   platform: string | null;
@@ -76,6 +83,7 @@ interface IPositionRow {
   changeTodayPercent: number | null;
   recentPrices: number[];
   editable: boolean; // 合并后的购入价是加权平均，编辑没有意义，只在展开（单批次）时能改
+  manipulationTags: IManipulationTag[];
 }
 
 // 不合并的展开视图下，同名饰品（同一批 Steam 导入的多个 asset）也不应该被
@@ -104,10 +112,15 @@ function mergeByItemName(rows: IPositionRow[]): IPositionRow[] {
     if (group.length === 1) return group[0];
 
     const totalQty = group.reduce((sum, r) => sum + r.quantity, 0);
-    const totalCost = group.reduce((sum, r) => sum + r.buyPrice * r.quantity, 0);
     const earliest = group.reduce((a, b) => (a.buyDate < b.buyDate ? a : b));
     const marketPrice = group[0].marketPrice;
-    const pnl = marketPrice !== null ? marketPrice * totalQty - totalCost : null;
+    // 成本和盈亏只按填了购入价的批次算，没填价的批次（开箱获得）只贡献数量和市值，
+    // 不然会把开箱饰品的整个市场价算成利润。
+    const known = group.filter((r) => r.buyPrice !== null && r.buyPrice > 0);
+    const knownQty = known.reduce((sum, r) => sum + r.quantity, 0);
+    const knownCost = known.reduce((sum, r) => sum + (r.buyPrice ?? 0) * r.quantity, 0);
+    const pnl =
+      marketPrice !== null && knownQty > 0 ? marketPrice * knownQty - knownCost : null;
     // 不同批次可能不是每条都有中文名/图标（比如新批次还没跑过 Steam 导入回填），
     // 取组里第一个有值的，不要固定用 group[0]（它可能恰好是缺字段的那条）。
     const withDisplayInfo = group.find((r) => r.nameCn && r.iconUrl) ?? group[0];
@@ -118,16 +131,17 @@ function mergeByItemName(rows: IPositionRow[]): IPositionRow[] {
       nameCn: withDisplayInfo.nameCn,
       iconUrl: withDisplayInfo.iconUrl,
       quantity: totalQty,
-      buyPrice: totalQty > 0 ? totalCost / totalQty : 0,
+      buyPrice: knownQty > 0 ? knownCost / knownQty : null,
       buyDate: earliest.buyDate,
       marketPrice,
       platform: group[0].platform,
       action: group[0].action,
       pnl,
-      pnlPercent: pnl !== null && totalCost > 0 ? (pnl / totalCost) * 100 : null,
+      pnlPercent: pnl !== null && knownCost > 0 ? (pnl / knownCost) * 100 : null,
       changeTodayPercent: group[0].changeTodayPercent,
       recentPrices: group[0].recentPrices,
       editable: false,
+      manipulationTags: group[0].manipulationTags,
     };
   });
 }
@@ -146,6 +160,13 @@ export default async function PositionsPage({
 
   const inventory = listInventory();
 
+  const tagsByItemName = new Map<string, IManipulationTag[]>();
+  for (const tag of listManipulationTags()) {
+    const list = tagsByItemName.get(tag.item_name) ?? [];
+    list.push(tag);
+    tagsByItemName.set(tag.item_name, list);
+  }
+
   let rows: IPositionRow[] = inventory.map((item) => {
     const platform = pickReferencePlatform(item.item_name);
     const latest = platform
@@ -153,9 +174,12 @@ export default async function PositionsPage({
       : undefined;
     const summary = platform ? computeSignalSummary(item.item_name, platform, true) : null;
     const marketPrice = latest?.price ?? null;
-    const pnl = marketPrice !== null ? (marketPrice - item.buy_price) * item.quantity : null;
+    // 购入价 0 = 没填 = 自己开箱获得，成本未知不算盈亏（算了会把整个市场价当利润）
+    const costKnown = item.buy_price > 0;
+    const pnl =
+      marketPrice !== null && costKnown ? (marketPrice - item.buy_price) * item.quantity : null;
     const pnlPercent =
-      marketPrice !== null && item.buy_price > 0
+      marketPrice !== null && costKnown
         ? ((marketPrice - item.buy_price) / item.buy_price) * 100
         : null;
 
@@ -175,6 +199,7 @@ export default async function PositionsPage({
       changeTodayPercent: summary?.changeToday?.percent ?? null,
       recentPrices: summary?.recentPrices ?? [],
       editable: true,
+      manipulationTags: tagsByItemName.get(item.item_name) ?? [],
     };
   });
 
@@ -194,7 +219,7 @@ export default async function PositionsPage({
         case "market":
           return row.marketPrice ?? NaN;
         case "buy":
-          return row.buyPrice;
+          return row.buyPrice ?? NaN;
         case "pnl":
           return row.pnl ?? NaN;
         case "days":
@@ -207,15 +232,29 @@ export default async function PositionsPage({
     rows = [...withValue, ...withoutValue];
   }
 
-  const totalMarketValue = inventory.reduce((sum, item) => {
+  // 汇总口径：市值算所有饰品；成本和盈亏只算填了购入价的（开箱获得的成本未知，
+  // 算进去会把整个市场价当利润，总盈亏会虚高）。
+  let totalMarketValue = 0;
+  let totalCost = 0;
+  let totalPnl = 0;
+  let unknownCostCount = 0;
+  for (const item of inventory) {
     const platform = pickReferencePlatform(item.item_name);
     const latest = platform
       ? getLatestPricesByPlatform(item.item_name).find((p) => p.platform === platform)
       : undefined;
-    return sum + (latest?.price ?? 0) * item.quantity;
-  }, 0);
-  const totalCost = inventory.reduce((sum, item) => sum + item.buy_price * item.quantity, 0);
-  const totalPnl = totalMarketValue - totalCost;
+    const marketPrice = latest?.price ?? null;
+    totalMarketValue += (marketPrice ?? 0) * item.quantity;
+
+    if (item.buy_price > 0) {
+      totalCost += item.buy_price * item.quantity;
+      if (marketPrice !== null) {
+        totalPnl += (marketPrice - item.buy_price) * item.quantity;
+      }
+    } else {
+      unknownCostCount += 1;
+    }
+  }
   const totalPnlPercent = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
 
   function sortLink(key: ISortKey): string {
@@ -242,7 +281,11 @@ export default async function PositionsPage({
             sub={`${formatSigned(totalPnlPercent)}%`}
             valueClassName={pnlColor(totalPnl)}
           />
-          <SummaryCard label="购入成本(元)" value={formatMoney(totalCost)} />
+          <SummaryCard
+            label="购入成本(元)"
+            value={formatMoney(totalCost)}
+            sub={unknownCostCount > 0 ? `${unknownCostCount} 件未填购入价，不计成本和盈亏` : undefined}
+          />
         </div>
         <div className="ml-4 flex shrink-0 gap-1 rounded-lg border border-neutral-800 p-1 text-xs">
           <Link
@@ -285,6 +328,8 @@ export default async function PositionsPage({
             合并相同项
           </Link>
           <RefreshInventoryButton />
+          <BackfillKlineButton />
+          <BackfillAnomalyScanButton />
         </div>
       </div>
 
@@ -313,6 +358,7 @@ export default async function PositionsPage({
               <th className="px-4 py-3 text-center">近7天走势</th>
               <th className="px-4 py-3 text-center">建议</th>
               <th className="px-4 py-3 text-left">AI 建议</th>
+              <th className="px-4 py-3 text-left">操盘标记</th>
               <th className="px-4 py-3 text-right">
                 <Link href={sortLink("days")}>持有天数{sortArrow("days")}</Link>
               </th>
@@ -338,7 +384,12 @@ export default async function PositionsPage({
                         <div className="size-10 shrink-0 rounded bg-neutral-800" />
                       )}
                       <div>
-                        <div className="font-medium">{displayName}</div>
+                        <Link
+                          href={`/item/${encodeURIComponent(row.itemName)}`}
+                          className="font-medium hover:text-blue-400 hover:underline"
+                        >
+                          {displayName}
+                        </Link>
                         <div className="text-xs text-neutral-500">x{row.quantity}</div>
                       </div>
                     </div>
@@ -348,9 +399,11 @@ export default async function PositionsPage({
                   </td>
                   <td className="px-4 py-3 text-right">
                     {row.editable ? (
-                      <EditableBuyPrice itemId={row.ids[0]} value={row.buyPrice} />
-                    ) : (
+                      <EditableBuyPrice itemId={row.ids[0]} value={row.buyPrice ?? 0} />
+                    ) : row.buyPrice !== null ? (
                       <span className="text-neutral-300">¥{formatMoney(row.buyPrice)}</span>
+                    ) : (
+                      <span className="text-neutral-500">-</span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-right">
@@ -397,6 +450,12 @@ export default async function PositionsPage({
                       <span className="text-xs text-neutral-500">暂无数据</span>
                     )}
                   </td>
+                  <td className="px-4 py-3">
+                    <ManipulationTagPanel
+                      itemName={row.itemName}
+                      initialTags={row.manipulationTags}
+                    />
+                  </td>
                   <td className="px-4 py-3 text-right text-neutral-400">
                     {holdingDays(row.buyDate)} 天
                   </td>
@@ -405,7 +464,7 @@ export default async function PositionsPage({
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={10} className="px-4 py-10 text-center text-neutral-500">
+                <td colSpan={11} className="px-4 py-10 text-center text-neutral-500">
                   {inventory.length === 0
                     ? "还没有持仓，先点右上角刷新库存或调用 POST /api/inventory 添加"
                     : "没有匹配的饰品"}

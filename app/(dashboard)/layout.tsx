@@ -1,10 +1,13 @@
 import Link from "next/link";
+import { countPendingAnomalyEvents } from "@/lib/db/anomaly-events";
 
 export default function DashboardLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const pendingAnomalies = countPendingAnomalyEvents();
+
   return (
     <div className="min-h-full bg-neutral-950 text-neutral-100">
       <nav className="flex items-center gap-6 border-b border-neutral-800 px-6 py-4">
@@ -16,6 +19,17 @@ export default function DashboardLayout({
         </Link>
         <Link href="/watchlist" className="text-sm text-neutral-400 hover:text-neutral-100">
           观察池
+        </Link>
+        <Link
+          href="/anomalies"
+          className="flex items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-100"
+        >
+          异常提醒
+          {pendingAnomalies > 0 && (
+            <span className="rounded-full bg-orange-500/20 px-1.5 py-0.5 text-xs text-orange-400">
+              {pendingAnomalies}
+            </span>
+          )}
         </Link>
       </nav>
       <main className="px-6 py-6">{children}</main>

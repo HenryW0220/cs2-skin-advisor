@@ -209,7 +209,12 @@ export default async function WatchlistPage({
                       ) : (
                         <div className="size-10 shrink-0 rounded bg-neutral-800" />
                       )}
-                      <div className="font-medium">{displayName}</div>
+                      <Link
+                        href={`/item/${encodeURIComponent(row.itemName)}`}
+                        className="font-medium hover:text-blue-400 hover:underline"
+                      >
+                        {displayName}
+                      </Link>
                     </div>
                   </td>
                   <td className="px-4 py-3 text-right">
