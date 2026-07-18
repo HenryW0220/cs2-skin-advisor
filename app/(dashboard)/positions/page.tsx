@@ -33,7 +33,7 @@ const ACTION_STYLE: Record<ITradeAction, string> = {
   WATCH: "bg-blue-500/15 text-blue-400",
 };
 
-const SORT_KEYS = ["market", "buy", "pnl", "days"] as const;
+const SORT_KEYS = ["market", "buy", "pnl", "pnlPercent", "changeToday", "days"] as const;
 type ISortKey = (typeof SORT_KEYS)[number];
 
 interface ISearchParams {
@@ -222,6 +222,10 @@ export default async function PositionsPage({
           return row.buyPrice ?? NaN;
         case "pnl":
           return row.pnl ?? NaN;
+        case "pnlPercent":
+          return row.pnlPercent ?? NaN;
+        case "changeToday":
+          return row.changeTodayPercent ?? NaN;
         case "days":
           return holdingDays(row.buyDate);
       }
@@ -353,8 +357,12 @@ export default async function PositionsPage({
               <th className="px-4 py-3 text-right">
                 <Link href={sortLink("pnl")}>盈亏{sortArrow("pnl")}</Link>
               </th>
-              <th className="px-4 py-3 text-right">收益率</th>
-              <th className="px-4 py-3 text-right">今日涨跌</th>
+              <th className="px-4 py-3 text-right">
+                <Link href={sortLink("pnlPercent")}>收益率{sortArrow("pnlPercent")}</Link>
+              </th>
+              <th className="px-4 py-3 text-right">
+                <Link href={sortLink("changeToday")}>今日涨跌{sortArrow("changeToday")}</Link>
+              </th>
               <th className="px-4 py-3 text-center">近7天走势</th>
               <th className="px-4 py-3 text-center">建议</th>
               <th className="px-4 py-3 text-left">AI 建议</th>

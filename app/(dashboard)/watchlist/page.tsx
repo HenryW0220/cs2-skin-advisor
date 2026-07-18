@@ -33,7 +33,7 @@ function formatSigned(value: number, suffix = ""): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}${suffix}`;
 }
 
-const SORT_KEYS = ["market", "score"] as const;
+const SORT_KEYS = ["market", "score", "changeToday"] as const;
 type ISortKey = (typeof SORT_KEYS)[number];
 
 interface ISearchParams {
@@ -108,8 +108,16 @@ export default async function WatchlistPage({
   }
 
   if (sortBy) {
-    const sortValue = (row: IWatchRow): number =>
-      sortBy === "market" ? row.marketPrice ?? NaN : row.score ?? NaN;
+    const sortValue = (row: IWatchRow): number => {
+      switch (sortBy) {
+        case "market":
+          return row.marketPrice ?? NaN;
+        case "score":
+          return row.score ?? NaN;
+        case "changeToday":
+          return row.changeTodayPercent ?? NaN;
+      }
+    };
     const withValue = rows.filter((r) => !Number.isNaN(sortValue(r)));
     const withoutValue = rows.filter((r) => Number.isNaN(sortValue(r)));
     withValue.sort((a, b) => (sortValue(a) - sortValue(b)) * (sortDir === "asc" ? 1 : -1));
@@ -176,7 +184,9 @@ export default async function WatchlistPage({
                 <Link href={sortLink("market")}>当前价{sortArrow("market")}</Link>
               </th>
               <th className="px-4 py-3 text-right">目标买入价</th>
-              <th className="px-4 py-3 text-right">今日涨跌</th>
+              <th className="px-4 py-3 text-right">
+                <Link href={sortLink("changeToday")}>今日涨跌{sortArrow("changeToday")}</Link>
+              </th>
               <th className="px-4 py-3 text-center">近7天走势</th>
               <th className="px-4 py-3 text-center">
                 <Link href={sortLink("score")}>买入时机{sortArrow("score")}</Link>
