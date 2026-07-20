@@ -31,6 +31,9 @@ export default function DashboardLayout({
             </span>
           )}
         </Link>
+        <Link href="/ledger" className="text-sm text-neutral-400 hover:text-neutral-100">
+          流水
+        </Link>
       </nav>
       <main className="px-6 py-6">{children}</main>
     </div>

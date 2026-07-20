@@ -63,6 +63,21 @@ export interface IItemMetadata {
   updated_at: string;
 }
 
+// 卖出流水，见 db/migrations/011_add_sales_records.sql。
+export interface ISaleRecord {
+  id: number;
+  item_name: string;
+  name_cn: string | null;
+  icon_url: string | null;
+  quantity: number;
+  buy_price: number;
+  sell_price: number | null;
+  sell_source: string | null;
+  steam_asset_id: string | null;
+  sold_at: string;
+  created_at: string;
+}
+
 export type IManipulationConfidence = "high" | "medium" | "low";
 
 // 用户凭小道消息标记的"操盘时间窗口"，是将来训练操盘检测模型的正样本标签，
