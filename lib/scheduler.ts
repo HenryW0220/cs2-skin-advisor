@@ -31,6 +31,13 @@ const globalScheduler = globalThis as typeof globalThis & {
 };
 
 export function startPriceSyncScheduler(): void {
+  // 常驻采集器（next start，见 PLAN.md A2）跑起来之后，开发用的 dev server 不该
+  // 再重复同步——SteamDT/C5 配额有限，双进程双倍消耗。.env.development 里设了
+  // 这个开关，只影响 next dev，不影响生产采集器。
+  if (process.env.PRICE_SYNC_DISABLED === "1") {
+    console.log("[price-sync] PRICE_SYNC_DISABLED=1，本进程不做定时同步（由常驻采集器负责）");
+    return;
+  }
   if (globalScheduler.__priceSyncTimer) return;
 
   globalScheduler.__priceSyncTimer = setInterval(() => {

@@ -1,5 +1,9 @@
 import Link from "next/link";
 import { AnomalyReviewActions } from "@/components/features/anomaly-review-actions";
+
+// 这个页面没有 searchParams，生产构建时会被静态预渲染成构建时刻的死数据——
+// 强制按请求渲染，待审核列表才是实时的。
+export const dynamic = "force-dynamic";
 import { SyncItemMetadataButton } from "@/components/features/sync-item-metadata-button";
 import { STEAM_ICON_BASE_URL } from "@/lib/api/steam";
 import { listAnomalyEvents } from "@/lib/db/anomaly-events";
