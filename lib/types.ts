@@ -21,6 +21,10 @@ export interface IPriceSnapshot {
   platform: string;
   price: number;
   volume: number | null;
+  // 求购价/求购数（挂单深度的需求侧）。SteamDT 一直有返回，C5 直连价格接口没有，
+  // 所以 platform='C5' 的行这两列固定是 null。
+  bidding_price: number | null;
+  bidding_count: number | null;
   captured_at: string;
   created_at: string;
 }

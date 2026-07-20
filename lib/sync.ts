@@ -50,6 +50,8 @@ export async function syncPriceSnapshots(): Promise<ISyncSummary> {
           platform: platformPrice.platform,
           price: platformPrice.sellPrice,
           volume: platformPrice.sellCount,
+          bidding_price: platformPrice.biddingPrice,
+          bidding_count: platformPrice.biddingCount,
           captured_at: platformPrice.updateTime
             ? new Date(platformPrice.updateTime * 1000).toISOString()
             : capturedAt,
