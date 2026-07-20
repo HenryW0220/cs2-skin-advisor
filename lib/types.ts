@@ -100,6 +100,14 @@ export interface IManipulationTag {
   created_at: string;
 }
 
+export interface IPushSubscription {
+  id: number;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  created_at: string;
+}
+
 export interface IWatchlistItem {
   id: number;
   item_name: string;

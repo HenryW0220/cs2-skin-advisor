@@ -86,7 +86,7 @@ export async function syncPriceSnapshots(): Promise<ISyncSummary> {
 
   // 价格写完再扫异常：z-score/成交量基线都是从 price_snapshots 里查历史算的，
   // 得先看到这一轮刚写入的最新快照才能判断"最新一期"正不正常。
-  const { eventsCreated } = scanForAnomalies();
+  const { eventsCreated } = await scanForAnomalies();
 
   return { itemCount: itemNames.length, snapshotCount, errors, anomaliesDetected: eventsCreated };
 }

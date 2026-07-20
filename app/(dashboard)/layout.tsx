@@ -34,6 +34,9 @@ export default function DashboardLayout({
         <Link href="/ledger" className="text-sm text-neutral-400 hover:text-neutral-100">
           流水
         </Link>
+        <Link href="/settings" className="text-sm text-neutral-400 hover:text-neutral-100">
+          设置
+        </Link>
       </nav>
       <main className="px-6 py-6">{children}</main>
     </div>

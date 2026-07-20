@@ -1,6 +1,7 @@
 import { addAnomalyEvent, hasRecentAnomalyEvent } from "./db/anomaly-events";
 import { listItemMetadata } from "./db/item-metadata";
 import { getPriceHistory } from "./db/snapshots";
+import { sendPushNotification } from "./api/web-push";
 import { detectPriceZScoreAnomaly, scanPriceZScoreAnomalies } from "./signals/anomaly";
 import { computeManipulationScore } from "./signals/manipulation-score";
 import { detectVolumeAnomaly } from "./signals/volume";
@@ -34,10 +35,13 @@ const MIN_PRICE_FOR_ANOMALY_SCAN = 1;
 const ALERT_COOLDOWN_MS = 3 * 24 * 60 * 60 * 1000;
 const MANIPULATION_ALERT_MIN_SCORE = 60;
 
-export function scanForAnomalies(): IAnomalyScanSummary {
+export async function scanForAnomalies(): Promise<IAnomalyScanSummary> {
   const itemNames = getTrackedItemNames();
   const cooldownSince = new Date(Date.now() - ALERT_COOLDOWN_MS).toISOString();
   let eventsCreated = 0;
+  // D3：只推"状态型"高优先级信号（嫌疑分、联动），z-score/成交量/洗盘这类事件型或
+  // 提示型信号太密，推了会被当骚扰关掉通知——冷却窗口（3天/条）已经把频率压住了。
+  const pushNotifications: { title: string; body: string; url: string }[] = [];
 
   // 本轮触发了异动的饰品（z-score 或嫌疑分），给联动预警当输入
   const triggered = new Map<string, { label: string; value: number }>();
@@ -114,6 +118,11 @@ export function scanForAnomalies(): IAnomalyScanSummary {
       if (created) {
         eventsCreated += 1;
         triggered.set(itemName, { label: `嫌疑分 ${manipulation.score}`, value: manipulation.score });
+        pushNotifications.push({
+          title: `操盘嫌疑分预警：${itemName}`,
+          body: `嫌疑分 ${manipulation.score}，24h涨跌 ${(manipulation.move24h * 100).toFixed(1)}%`,
+          url: `/item/${encodeURIComponent(itemName)}`,
+        });
       }
     }
 
@@ -166,8 +175,19 @@ export function scanForAnomalies(): IAnomalyScanSummary {
         price: latest.price,
         context: `同收藏品「${triggerMeta.collection}」的上级 ${triggerName}（${triggerMeta.rarity ?? ""}）异动（${trigger.label}），本品是下级炼金料，可能跟涨`,
       });
-      if (created) eventsCreated += 1;
+      if (created) {
+        eventsCreated += 1;
+        pushNotifications.push({
+          title: `联动预警：${itemName}`,
+          body: `同收藏品上级 ${triggerName} 异动（${trigger.label}），本品可能跟涨`,
+          url: `/item/${encodeURIComponent(itemName)}`,
+        });
+      }
     }
+  }
+
+  for (const notification of pushNotifications) {
+    await sendPushNotification(notification);
   }
 
   return { itemsScanned: itemNames.length, eventsCreated };

@@ -131,6 +131,11 @@ NVIDIA_MODEL=deepseek-ai/deepseek-v4-flash
 STEAM_API_KEY=
 STEAM_USER_ID=
 
+# Web Push（D3，`npx web-push generate-vapid-keys` 生成；公钥要 NEXT_PUBLIC_ 前缀才能进浏览器 bundle）
+NEXT_PUBLIC_VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_CONTACT_EMAIL=
+
 # 开发模式
 USE_MOCK=false
 ```
