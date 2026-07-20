@@ -40,7 +40,7 @@ function formatMetricValue(metric: IAnomalyMetric, value: number): string {
     case "collection_linkage":
       return `上级信号强度 ${value.toFixed(1)}`;
     case "washout_signal":
-      return `回撤 ${(value * 100).toFixed(1)}%`;
+      return `回撤 ${value.toFixed(1)}%`;
   }
 }
 

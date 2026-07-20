@@ -133,7 +133,10 @@ export function scanForAnomalies(): IAnomalyScanSummary {
         platform,
         metric: "washout_signal",
         detected_at: latest.captured_at,
-        value: washout.drawdown,
+        // 待审核列表按 ABS(value) DESC 跟其他指标混排（价格 z-score 6~35、嫌疑分 60~100），
+        // 存成 0~1 的小数会永远沉底、50 条分页里根本看不到——存成百分比数值（15~），
+        // 量级才跟其他指标可比。
+        value: washout.drawdown * 100,
         price: latest.price,
         context: `近48小时回撤 ${(washout.drawdown * 100).toFixed(1)}%、波动率 ${(washout.volatility * 100).toFixed(2)}%，形态上和 REPORT-B2.md 里验证过的洗盘案例相似（深回撤后可能接急拉），也可能只是正常下跌，仅供参考`,
       });
