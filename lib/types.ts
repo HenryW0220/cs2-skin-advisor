@@ -71,8 +71,10 @@ export interface ISaleRecord {
   icon_url: string | null;
   quantity: number;
   buy_price: number;
-  sell_price: number | null;
+  sell_price: number | null; // 净到手价（已扣平台交易手续费）
   sell_source: string | null;
+  sell_platform: string | null;
+  sell_price_gross: number | null; // 平台成交价（扣费前），用户填的原始数字
   steam_asset_id: string | null;
   sold_at: string;
   created_at: string;

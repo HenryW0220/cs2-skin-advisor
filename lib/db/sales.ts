@@ -25,10 +25,18 @@ export function listSaleRecords(): ISaleRecord[] {
     .all() as ISaleRecord[];
 }
 
-export function updateSaleSellPrice(id: number, sellPrice: number): ISaleRecord | undefined {
+// sellPrice 是扣完手续费的净到手价，gross 是用户填的平台成交价（留档可重算）
+export function updateSaleSellPrice(
+  id: number,
+  sellPrice: number,
+  gross: number,
+  platform: string
+): ISaleRecord | undefined {
   getDb()
-    .prepare("UPDATE sales_records SET sell_price = ?, sell_source = 'manual' WHERE id = ?")
-    .run(sellPrice, id);
+    .prepare(
+      "UPDATE sales_records SET sell_price = ?, sell_price_gross = ?, sell_platform = ?, sell_source = 'manual' WHERE id = ?"
+    )
+    .run(sellPrice, gross, platform, id);
   return getDb().prepare("SELECT * FROM sales_records WHERE id = ?").get(id) as
     | ISaleRecord
     | undefined;

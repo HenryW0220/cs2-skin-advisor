@@ -54,7 +54,7 @@ export default function LedgerPage() {
         <h1 className="text-lg font-semibold text-neutral-200">交易流水</h1>
         <p className="mt-1 text-sm text-neutral-500">
           刷新库存发现资产从 Steam 库存消失时自动记一笔卖出，卖价优先从 C5
-          卖单匹配，没匹配到的在下面补填；月度盈利只统计买卖两头价格都已知的记录（开箱所得成本按未知处理）。
+          卖单匹配，没匹配到的在下面补填——填平台成交价、选平台，入账自动扣掉交易手续费，盈利按净到手算；月度盈利只统计买卖两头价格都已知的记录（开箱所得成本按未知处理）。
         </p>
       </div>
 
@@ -116,9 +116,17 @@ export default function LedgerPage() {
                     </td>
                     <td className="px-4 py-2.5 text-right">
                       {r.sell_price !== null ? (
-                        <span className="text-neutral-200">卖 ¥{r.sell_price.toFixed(2)}</span>
+                        <div>
+                          <span className="text-neutral-200">卖 ¥{r.sell_price.toFixed(2)}</span>
+                          {r.sell_price_gross !== null && r.sell_price_gross !== r.sell_price && (
+                            <div className="text-xs text-neutral-500">
+                              成交 ¥{r.sell_price_gross.toFixed(2)}
+                              {r.sell_platform ? ` · ${r.sell_platform}已扣费` : ""}
+                            </div>
+                          )}
+                        </div>
                       ) : (
-                        <EditableSellPrice saleId={r.id} value={r.sell_price} />
+                        <EditableSellPrice saleId={r.id} />
                       )}
                     </td>
                     <td className="px-4 py-2.5 text-right">
