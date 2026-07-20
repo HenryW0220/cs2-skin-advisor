@@ -11,6 +11,8 @@ const VALID_CONFIDENCE: IManipulationConfidence[] = ["high", "medium", "low"];
 const METRIC_LABEL: Record<string, string> = {
   price_zscore: "价格异常波动",
   volume_ratio: "成交量异常放大",
+  manipulation_score: "操盘嫌疑分",
+  collection_linkage: "同收藏品联动",
 };
 
 // 确认这个自动检测到的异常确实是操盘：生成对应的操盘标记（正样本）。

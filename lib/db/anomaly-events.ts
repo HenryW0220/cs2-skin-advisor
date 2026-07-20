@@ -10,14 +10,30 @@ export function addAnomalyEvent(event: {
   detected_at: string;
   value: number;
   price: number;
+  context?: string | null;
 }): boolean {
   const result = getDb()
     .prepare(
-      `INSERT OR IGNORE INTO anomaly_events (item_name, platform, metric, detected_at, value, price)
-       VALUES (@item_name, @platform, @metric, @detected_at, @value, @price)`
+      `INSERT OR IGNORE INTO anomaly_events (item_name, platform, metric, detected_at, value, price, context)
+       VALUES (@item_name, @platform, @metric, @detected_at, @value, @price, @context)`
     )
-    .run(event);
+    .run({ context: null, ...event });
   return result.changes > 0;
+}
+
+// 预警类指标（嫌疑分/联动）的防刷屏检查：分数持续高位时每小时扫描都会命中，
+// 同一饰品同一指标在窗口期内只提醒一次，用户忽略过的也不在窗口内重复打扰。
+export function hasRecentAnomalyEvent(
+  itemName: string,
+  metric: IAnomalyMetric,
+  sinceIso: string
+): boolean {
+  const row = getDb()
+    .prepare(
+      "SELECT COUNT(*) c FROM anomaly_events WHERE item_name = ? AND metric = ? AND detected_at >= ?"
+    )
+    .get(itemName, metric, sinceIso) as { c: number };
+  return row.c > 0;
 }
 
 // 按异常程度（|value| 从大到小）排序，不是按时间——待审核的量级不小，

@@ -25,7 +25,13 @@ export interface IPriceSnapshot {
   created_at: string;
 }
 
-export type IAnomalyMetric = "price_zscore" | "volume_ratio";
+// price_zscore/volume_ratio 是统计异常；manipulation_score 是操盘嫌疑分预警（≥60 触发）；
+// collection_linkage 是"同收藏品上级异动，下级炼金料可能跟涨"的联动预警。
+export type IAnomalyMetric =
+  | "price_zscore"
+  | "volume_ratio"
+  | "manipulation_score"
+  | "collection_linkage";
 // confirmed=确认操盘（正样本）；external=外部事件驱动的真实行情（版本更新/炼金开放/
 // 大赛等，困难负样本，review_note 记录具体事件）；dismissed=正常波动（普通负样本）。
 export type IAnomalyStatus = "pending" | "confirmed" | "external" | "dismissed";
@@ -40,6 +46,7 @@ export interface IAnomalyEvent {
   value: number;
   price: number;
   status: IAnomalyStatus;
+  context: string | null; // 检测时写入的说明（联动来源、触发时特征值），区别于审核时的 review_note
   review_note: string | null;
   reviewed_at: string | null;
   created_at: string;

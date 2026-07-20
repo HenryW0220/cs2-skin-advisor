@@ -10,11 +10,29 @@ import type { IAnomalyEvent, IAnomalyMetric, IItemMetadata } from "@/lib/types";
 const METRIC_LABEL: Record<IAnomalyMetric, string> = {
   price_zscore: "价格波动异常",
   volume_ratio: "成交量放大",
+  manipulation_score: "操盘嫌疑",
+  collection_linkage: "联动预警",
+};
+
+// 联动预警用紫色跟收藏品体系呼应，嫌疑分用红色示警，统计异常保持橙色
+const METRIC_STYLE: Record<IAnomalyMetric, string> = {
+  price_zscore: "bg-orange-500/15 text-orange-400",
+  volume_ratio: "bg-orange-500/15 text-orange-400",
+  manipulation_score: "bg-red-500/15 text-red-400",
+  collection_linkage: "bg-purple-500/15 text-purple-300",
 };
 
 function formatMetricValue(metric: IAnomalyMetric, value: number): string {
-  if (metric === "price_zscore") return `z-score ${value.toFixed(2)}`;
-  return `${value.toFixed(1)}x 于历史均值`;
+  switch (metric) {
+    case "price_zscore":
+      return `z-score ${value.toFixed(2)}`;
+    case "volume_ratio":
+      return `${value.toFixed(1)}x 于历史均值`;
+    case "manipulation_score":
+      return `嫌疑分 ${value.toFixed(0)}`;
+    case "collection_linkage":
+      return `上级信号强度 ${value.toFixed(1)}`;
+  }
 }
 
 interface ICollectionCluster {
@@ -155,7 +173,7 @@ export default async function AnomaliesPage() {
                   {displayName}
                 </Link>
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-neutral-500">
-                  <span className="rounded bg-orange-500/15 px-1.5 py-0.5 text-orange-400">
+                  <span className={`rounded px-1.5 py-0.5 ${METRIC_STYLE[event.metric]}`}>
                     {METRIC_LABEL[event.metric]}
                   </span>
                   <span>{formatMetricValue(event.metric, event.value)}</span>
@@ -169,6 +187,9 @@ export default async function AnomaliesPage() {
                     </span>
                   )}
                 </div>
+                {event.context && (
+                  <div className="mt-0.5 text-xs text-neutral-500">{event.context}</div>
+                )}
               </div>
 
               <AnomalyReviewActions
