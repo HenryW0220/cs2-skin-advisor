@@ -1,8 +1,7 @@
 import { getKline } from "./api/steamdt";
-import { listInventory } from "./db/inventory";
 import { insertPriceSnapshot } from "./db/snapshots";
-import { listWatchlist } from "./db/watchlist";
 import { pickReferencePlatform } from "./signal-summary";
+import { getTrackedItemNames } from "./tracked-items";
 
 export interface IKlineBackfillError {
   itemName: string;
@@ -57,10 +56,7 @@ export async function backfillKlineForItem(
 // 批量回填持仓+观察池的全部饰品，写回 price_snapshots 后立刻能被
 // computeSignalSummary 现有的 MA/RSI 计算用上，不需要额外改信号计算逻辑。
 export async function backfillInventoryKline(): Promise<IKlineBackfillSummary> {
-  const names = new Set<string>();
-  for (const item of listInventory()) names.add(item.item_name);
-  for (const item of listWatchlist()) names.add(item.item_name);
-  const itemNames = [...names];
+  const itemNames = getTrackedItemNames();
 
   let snapshotCount = 0;
   const errors: IKlineBackfillError[] = [];

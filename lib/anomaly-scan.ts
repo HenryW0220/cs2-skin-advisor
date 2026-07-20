@@ -1,13 +1,12 @@
 import { addAnomalyEvent, hasRecentAnomalyEvent } from "./db/anomaly-events";
-import { listInventory } from "./db/inventory";
 import { listItemMetadata } from "./db/item-metadata";
 import { getPriceHistory } from "./db/snapshots";
-import { listWatchlist } from "./db/watchlist";
 import { detectPriceZScoreAnomaly, scanPriceZScoreAnomalies } from "./signals/anomaly";
 import { computeManipulationScore } from "./signals/manipulation-score";
 import { detectVolumeAnomaly } from "./signals/volume";
 import { computeWashoutSignal } from "./signals/washout";
 import { pickReferencePlatform } from "./signal-summary";
+import { getTrackedItemNames } from "./tracked-items";
 
 export interface IAnomalyScanSummary {
   itemsScanned: number;
@@ -16,7 +15,8 @@ export interface IAnomalyScanSummary {
 
 // 每次价格同步后跑一遍：统计异常检测（价格 z-score + 成交量倍数）+ 操盘嫌疑分预警 +
 // 同收藏品联动预警，命中就落 pending 的 anomaly_events，等用户去 /anomalies 审核。
-// 扫描范围是持仓+观察池（观察池就是数据面扩容入口，见 PLAN.md A3）。
+// 扫描范围见 lib/tracked-items.ts：持仓只算 buy_price>0 的部分（开箱所得的审不过来），
+// 加观察池（观察池就是数据面扩容入口，见 PLAN.md A3）。
 //
 // 成交量用的窗口（168 期）比 lib/rules/evaluate.ts 里规则引擎用的默认窗口（7 期）
 // 长得多——规则引擎要的是"这一刻要不要决策"的短期信号，这里要的是"相对这个饰品
@@ -33,13 +33,6 @@ const MIN_PRICE_FOR_ANOMALY_SCAN = 1;
 // 同一饰品在窗口期内只提醒一次，不然每小时扫描一次就刷屏了。
 const ALERT_COOLDOWN_MS = 3 * 24 * 60 * 60 * 1000;
 const MANIPULATION_ALERT_MIN_SCORE = 60;
-
-function getTrackedItemNames(): string[] {
-  const names = new Set<string>();
-  for (const item of listInventory()) names.add(item.item_name);
-  for (const item of listWatchlist()) names.add(item.item_name);
-  return [...names];
-}
 
 export function scanForAnomalies(): IAnomalyScanSummary {
   const itemNames = getTrackedItemNames();

@@ -87,14 +87,23 @@ function findCollectionClusters(
 const PAGE_LIMIT = 50;
 
 export default async function AnomaliesPage() {
-  const allPending = listAnomalyEvents("pending");
+  const inventory = listInventory();
+  // buy_price=0 是开箱所得，购入渠道未知，用户没法凭消息判断这是不是操盘——
+  // 之前这类饰品占了待审核队列的大头，审不过来，默认不展示（数据库里不动，
+  // 想回头看还在，见 lib/tracked-items.ts 的说明）。
+  const openedItemNames = new Set(
+    inventory.filter((item) => item.buy_price === 0).map((item) => item.item_name)
+  );
+  const rawPending = listAnomalyEvents("pending");
+  const allPending = rawPending.filter((event) => !openedItemNames.has(event.item_name));
+  const hiddenOpenedCount = rawPending.length - allPending.length;
   const events = allPending.slice(0, PAGE_LIMIT);
   const pendingCountByItem = new Map<string, number>();
   for (const event of allPending) {
     pendingCountByItem.set(event.item_name, (pendingCountByItem.get(event.item_name) ?? 0) + 1);
   }
   const displayInfoByName = new Map(
-    listInventory().map((item) => [item.item_name, { nameCn: item.name_cn, iconUrl: item.icon_url }])
+    inventory.map((item) => [item.item_name, { nameCn: item.name_cn, iconUrl: item.icon_url }])
   );
   const metaByName = new Map(listItemMetadata().map((meta) => [meta.item_name, meta]));
   const clusters = findCollectionClusters(allPending, metaByName);
@@ -114,6 +123,11 @@ export default async function AnomaliesPage() {
         {allPending.length > PAGE_LIMIT && (
           <p className="mt-1 text-xs text-neutral-600">
             共 {allPending.length} 条待审核，按异常程度排序显示最可疑的 {PAGE_LIMIT} 条
+          </p>
+        )}
+        {hiddenOpenedCount > 0 && (
+          <p className="mt-1 text-xs text-neutral-600">
+            另有 {hiddenOpenedCount} 条来自开箱所得（未标购入价）的饰品，默认不在此列表展示
           </p>
         )}
         </div>

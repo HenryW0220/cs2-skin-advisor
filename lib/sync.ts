@@ -1,9 +1,8 @@
 import { getProductPrices } from "./api/c5";
 import { getBatchPrice } from "./api/steamdt";
 import { scanForAnomalies } from "./anomaly-scan";
-import { listInventory } from "./db/inventory";
 import { insertPriceSnapshot } from "./db/snapshots";
-import { listWatchlist } from "./db/watchlist";
+import { getTrackedItemNames } from "./tracked-items";
 
 export interface ISyncError {
   itemName: string;
@@ -16,13 +15,6 @@ export interface ISyncSummary {
   snapshotCount: number;
   errors: ISyncError[];
   anomaliesDetected: number;
-}
-
-function getTrackedItemNames(): string[] {
-  const names = new Set<string>();
-  for (const item of listInventory()) names.add(item.item_name);
-  for (const item of listWatchlist()) names.add(item.item_name);
-  return [...names];
 }
 
 // 手动触发的全量价格刷新：SteamDT 和 C5 各批量查一次（不是每个饰品单独调），写进 price_snapshots。
