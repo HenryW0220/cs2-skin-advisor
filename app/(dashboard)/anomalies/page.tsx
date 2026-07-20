@@ -16,14 +16,17 @@ const METRIC_LABEL: Record<IAnomalyMetric, string> = {
   volume_ratio: "成交量放大",
   manipulation_score: "操盘嫌疑",
   collection_linkage: "联动预警",
+  washout_signal: "疑似洗盘",
 };
 
-// 联动预警用紫色跟收藏品体系呼应，嫌疑分用红色示警，统计异常保持橙色
+// 联动预警用紫色跟收藏品体系呼应，嫌疑分用红色示警，统计异常保持橙色，
+// 洗盘信号用蓝色区分——它是提示性的领先信号，不是"已确认异动"，颜色上不该和红/橙抢眼
 const METRIC_STYLE: Record<IAnomalyMetric, string> = {
   price_zscore: "bg-orange-500/15 text-orange-400",
   volume_ratio: "bg-orange-500/15 text-orange-400",
   manipulation_score: "bg-red-500/15 text-red-400",
   collection_linkage: "bg-purple-500/15 text-purple-300",
+  washout_signal: "bg-blue-500/15 text-blue-300",
 };
 
 function formatMetricValue(metric: IAnomalyMetric, value: number): string {
@@ -36,6 +39,8 @@ function formatMetricValue(metric: IAnomalyMetric, value: number): string {
       return `嫌疑分 ${value.toFixed(0)}`;
     case "collection_linkage":
       return `上级信号强度 ${value.toFixed(1)}`;
+    case "washout_signal":
+      return `回撤 ${(value * 100).toFixed(1)}%`;
   }
 }
 

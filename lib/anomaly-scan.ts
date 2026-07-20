@@ -6,6 +6,7 @@ import { listWatchlist } from "./db/watchlist";
 import { detectPriceZScoreAnomaly, scanPriceZScoreAnomalies } from "./signals/anomaly";
 import { computeManipulationScore } from "./signals/manipulation-score";
 import { detectVolumeAnomaly } from "./signals/volume";
+import { computeWashoutSignal } from "./signals/washout";
 import { pickReferencePlatform } from "./signal-summary";
 
 export interface IAnomalyScanSummary {
@@ -121,6 +122,22 @@ export function scanForAnomalies(): IAnomalyScanSummary {
         eventsCreated += 1;
         triggered.set(itemName, { label: `嫌疑分 ${manipulation.score}`, value: manipulation.score });
       }
+    }
+
+    // 洗盘/砸盘信号（B2 报告验证过的指纹）：提示性质，不进联动预警的 triggered 集合——
+    // 这只是"疑似洗盘"，不是确认异动，不该拿去触发下级饰品的联动预警。
+    const washout = computeWashoutSignal(prices);
+    if (washout?.isWashout && !hasRecentAnomalyEvent(itemName, "washout_signal", cooldownSince)) {
+      const created = addAnomalyEvent({
+        item_name: itemName,
+        platform,
+        metric: "washout_signal",
+        detected_at: latest.captured_at,
+        value: washout.drawdown,
+        price: latest.price,
+        context: `近48小时回撤 ${(washout.drawdown * 100).toFixed(1)}%、波动率 ${(washout.volatility * 100).toFixed(2)}%，形态上和 REPORT-B2.md 里验证过的洗盘案例相似（深回撤后可能接急拉），也可能只是正常下跌，仅供参考`,
+      });
+      if (created) eventsCreated += 1;
     }
   }
 
