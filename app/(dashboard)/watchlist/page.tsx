@@ -79,11 +79,12 @@ export default async function WatchlistPage({
   const watchlist = listWatchlist();
 
   let rows: IWatchRow[] = watchlist.map((item) => {
-    const platform = pickReferencePlatform(item.item_name);
-    const latest = platform
-      ? getLatestPricesByPlatform(item.item_name).find((p) => p.platform === platform)
-      : undefined;
-    const summary = platform ? computeSignalSummary(item.item_name, platform, false) : null;
+    const latestByPlatform = getLatestPricesByPlatform(item.item_name);
+    const platform = pickReferencePlatform(item.item_name, latestByPlatform);
+    const latest = platform ? latestByPlatform.find((p) => p.platform === platform) : undefined;
+    const summary = platform
+      ? computeSignalSummary(item.item_name, platform, false, latestByPlatform)
+      : null;
 
     return {
       id: item.id,

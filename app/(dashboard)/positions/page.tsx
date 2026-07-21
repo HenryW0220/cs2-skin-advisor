@@ -155,12 +155,16 @@ export default async function PositionsPage({
 
   const inventory = listInventory();
 
-  let rows: IPositionRow[] = inventory.map((item) => {
-    const platform = pickReferencePlatform(item.item_name);
-    const latest = platform
-      ? getLatestPricesByPlatform(item.item_name).find((p) => p.platform === platform)
-      : undefined;
-    const summary = platform ? computeSignalSummary(item.item_name, platform, true) : null;
+  // 每个饰品的"各平台最新价"在这一次请求里只查一次，往下传给
+  // pickReferencePlatform/computeSignalSummary 复用——持仓量一大（几百件），
+  // 重复查同一张表是页面变慢的主因，不是网络问题。
+  const allRows: IPositionRow[] = inventory.map((item) => {
+    const latestByPlatform = getLatestPricesByPlatform(item.item_name);
+    const platform = pickReferencePlatform(item.item_name, latestByPlatform);
+    const latest = platform ? latestByPlatform.find((p) => p.platform === platform) : undefined;
+    const summary = platform
+      ? computeSignalSummary(item.item_name, platform, true, latestByPlatform)
+      : null;
     const marketPrice = latest?.price ?? null;
     // 购入价 0 = 没填 = 自己开箱获得，成本未知不算盈亏（算了会把整个市场价当利润）
     const costKnown = item.buy_price > 0;
@@ -190,7 +194,7 @@ export default async function PositionsPage({
     };
   });
 
-  rows = merged ? mergeByItemName(rows) : groupAdjacentByItemName(rows);
+  let rows: IPositionRow[] = merged ? mergeByItemName(allRows) : groupAdjacentByItemName(allRows);
 
   if (query) {
     rows = rows.filter(
@@ -234,18 +238,13 @@ export default async function PositionsPage({
   let totalCost = 0;
   let totalPnl = 0;
   let unknownCostCount = 0;
-  for (const item of inventory) {
-    const platform = pickReferencePlatform(item.item_name);
-    const latest = platform
-      ? getLatestPricesByPlatform(item.item_name).find((p) => p.platform === platform)
-      : undefined;
-    const marketPrice = latest?.price ?? null;
-    totalMarketValue += (marketPrice ?? 0) * item.quantity;
+  for (const row of allRows) {
+    totalMarketValue += (row.marketPrice ?? 0) * row.quantity;
 
-    if (item.buy_price > 0) {
-      totalCost += item.buy_price * item.quantity;
-      if (marketPrice !== null) {
-        totalPnl += (marketPrice - item.buy_price) * item.quantity;
+    if (row.buyPrice !== null && row.buyPrice > 0) {
+      totalCost += row.buyPrice * row.quantity;
+      if (row.pnl !== null) {
+        totalPnl += row.pnl;
       }
     } else {
       unknownCostCount += 1;

@@ -46,10 +46,14 @@ function findSnapshotAtOrBefore(
 
 // 给一个饰品在指定价格数据平台上算出最新的技术指标 + 规则引擎结论 + 跨平台价差。
 // 没有价格数据（还没 sync 过）时返回 null，调用方决定怎么提示用户。
+// prefetchedLatestByPlatform：调用方如果已经查过 getLatestPricesByPlatform（比如同一次
+// 循环里 pickReferencePlatform 已经查过），传进来复用，避免同一个饰品在一次请求里被
+// 反复查同一张表——持仓页这类批量渲染场景每个饰品少查一次就是几百次 SQL 的差距。
 export function computeSignalSummary(
   itemName: string,
   platform: string,
-  holding: boolean
+  holding: boolean,
+  prefetchedLatestByPlatform?: IPriceSnapshot[]
 ): ISignalSummary | null {
   const history = getPriceHistory(itemName, platform);
   if (history.length === 0) return null;
@@ -69,7 +73,7 @@ export function computeSignalSummary(
 
   const rule = evaluateSignals(signals, { holding });
 
-  const latestByPlatform = getLatestPricesByPlatform(itemName);
+  const latestByPlatform = prefetchedLatestByPlatform ?? getLatestPricesByPlatform(itemName);
   const crossPlatformSpread = computeCrossPlatformSpread(
     latestByPlatform.map((p) => ({ platform: p.platform, price: p.price }))
   );
@@ -108,9 +112,14 @@ export function computeSignalSummary(
 // 有提现折损，标价虚高，不能代表真实能成交的行情价。
 const PLATFORM_PRIORITY = ["C5", "BUFF", "YOUPIN"];
 
-export function pickReferencePlatform(itemName: string): string | null {
+export function pickReferencePlatform(
+  itemName: string,
+  prefetchedLatestByPlatform?: IPriceSnapshot[]
+): string | null {
   // 价格为 0 的是没挂单/接口没覆盖的死数据（CSMONEY/DMARKET 常见），直接排除。
-  const candidates = getLatestPricesByPlatform(itemName).filter((p) => p.price > 0);
+  const candidates = (prefetchedLatestByPlatform ?? getLatestPricesByPlatform(itemName)).filter(
+    (p) => p.price > 0
+  );
   if (candidates.length === 0) return null;
 
   for (const preferred of PLATFORM_PRIORITY) {
