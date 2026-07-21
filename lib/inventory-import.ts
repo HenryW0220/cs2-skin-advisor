@@ -50,6 +50,7 @@ export async function importSteamInventory(steamId: string): Promise<IImportSumm
       imported: 0,
       backfilled: 0,
       removed: 0,
+      removedNoCostBasis: 0,
       skippedNotMarketable: 0,
       error: result.error,
     };

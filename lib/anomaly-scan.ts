@@ -4,6 +4,7 @@ import { getPriceHistory } from "./db/snapshots";
 import { sendPushNotification } from "./api/web-push";
 import { detectPriceZScoreAnomaly, scanPriceZScoreAnomalies } from "./signals/anomaly";
 import { computeManipulationScore } from "./signals/manipulation-score";
+import { computeMomentumChaseSignal } from "./signals/momentum-chase";
 import { detectVolumeAnomaly } from "./signals/volume";
 import { computeWashoutSignal } from "./signals/washout";
 import { pickReferencePlatform } from "./signal-summary";
@@ -141,6 +142,25 @@ export async function scanForAnomalies(): Promise<IAnomalyScanSummary> {
         value: washout.drawdown * 100,
         price: latest.price,
         context: `近48小时回撤 ${(washout.drawdown * 100).toFixed(1)}%、波动率 ${(washout.volatility * 100).toFixed(2)}%，形态上和 REPORT-B2.md 里验证过的洗盘案例相似（深回撤后可能接急拉），也可能只是正常下跌，仅供参考`,
+      });
+      if (created) eventsCreated += 1;
+    }
+
+    // 追涨风险信号（REPORT-T7.md 验证过的最稳结论）：同样提示性质，不进联动预警的
+    // triggered 集合——涨了不代表操盘确认，只是"现在追可能站在高位"的风险提示。
+    const momentumChase = computeMomentumChaseSignal(prices);
+    if (
+      momentumChase?.isChasing &&
+      !hasRecentAnomalyEvent(itemName, "momentum_chase", cooldownSince)
+    ) {
+      const created = addAnomalyEvent({
+        item_name: itemName,
+        platform,
+        metric: "momentum_chase",
+        detected_at: latest.captured_at,
+        value: momentumChase.return24h * 100, // 同 washout_signal，存百分比数值方便跟其他指标混排
+        price: latest.price,
+        context: `近24小时涨幅 ${(momentumChase.return24h * 100).toFixed(1)}%，REPORT-T7.md 统计过历史上这个量级的涨幅未来7天平均收益 -10.74%（70.8% 概率为负），现在追高风险偏大，但也可能是主拉升刚开始，仅供参考`,
       });
       if (created) eventsCreated += 1;
     }

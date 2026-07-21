@@ -14,6 +14,7 @@ const METRIC_LABEL: Record<string, string> = {
   manipulation_score: "操盘嫌疑分",
   collection_linkage: "同收藏品联动",
   washout_signal: "疑似洗盘",
+  momentum_chase: "追涨风险",
 };
 
 // 确认这个自动检测到的异常确实是操盘：生成对应的操盘标记（正样本）。
