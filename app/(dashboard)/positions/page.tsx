@@ -268,8 +268,8 @@ export default async function PositionsPage({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="grid flex-1 grid-cols-3 gap-4">
+      <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="grid w-full flex-1 grid-cols-1 gap-4 sm:grid-cols-3">
           <SummaryCard label="市场价(元)" value={formatMoney(totalMarketValue)} sub={`${inventory.length} 件`} />
           <SummaryCard
             label="总盈亏(元)"
@@ -283,7 +283,7 @@ export default async function PositionsPage({
             sub={unknownCostCount > 0 ? `${unknownCostCount} 件未填购入价，不计成本和盈亏` : undefined}
           />
         </div>
-        <div className="ml-4 flex shrink-0 gap-1 rounded-lg border border-neutral-800 p-1 text-xs">
+        <div className="flex shrink-0 gap-1 rounded-lg border border-neutral-800 p-1 text-xs sm:ml-4">
           <Link
             href={buildHref({ ...sp, lang: "zh" })}
             className={`rounded px-2 py-1 ${!showEnglish ? "bg-neutral-800 text-neutral-100" : "text-neutral-500"}`}
@@ -299,7 +299,7 @@ export default async function PositionsPage({
         </div>
       </div>
 
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <form action="/positions" method="GET" className="flex items-center gap-2">
           {sp.lang && <input type="hidden" name="lang" value={sp.lang} />}
           {sp.merge && <input type="hidden" name="merge" value={sp.merge} />}
@@ -308,16 +308,16 @@ export default async function PositionsPage({
             name="q"
             defaultValue={sp.q}
             placeholder="搜索饰品名称（中/英文都行）"
-            className="w-64 rounded border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm placeholder:text-neutral-600 focus:border-neutral-500 focus:outline-none"
+            className="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm placeholder:text-neutral-600 focus:border-neutral-500 focus:outline-none sm:w-64"
           />
         </form>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Link
             href={buildHref({ ...sp, merge: merged ? undefined : "true" })}
-            className="flex items-center gap-1.5 text-xs text-neutral-400 hover:text-neutral-100"
+            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-neutral-400 hover:text-neutral-100"
           >
             <span
-              className={`flex size-4 items-center justify-center rounded border ${merged ? "border-blue-400 bg-blue-500/20 text-blue-400" : "border-neutral-600"}`}
+              className={`flex size-4 shrink-0 items-center justify-center rounded border ${merged ? "border-blue-400 bg-blue-500/20 text-blue-400" : "border-neutral-600"}`}
             >
               {merged ? "✓" : ""}
             </span>

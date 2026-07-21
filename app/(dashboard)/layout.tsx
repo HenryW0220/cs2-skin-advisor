@@ -10,19 +10,25 @@ export default function DashboardLayout({
 
   return (
     <div className="min-h-full bg-neutral-950 text-neutral-100">
-      <nav className="flex items-center gap-6 border-b border-neutral-800 px-6 py-4">
-        <span className="font-semibold tracking-wide text-neutral-300">
+      <nav className="flex items-center gap-6 overflow-x-auto border-b border-neutral-800 px-6 py-4">
+        <span className="shrink-0 whitespace-nowrap font-semibold tracking-wide text-neutral-300">
           CS2 皮肤交易决策助手
         </span>
-        <Link href="/positions" className="text-sm text-neutral-400 hover:text-neutral-100">
+        <Link
+          href="/positions"
+          className="shrink-0 whitespace-nowrap text-sm text-neutral-400 hover:text-neutral-100"
+        >
           持仓
         </Link>
-        <Link href="/watchlist" className="text-sm text-neutral-400 hover:text-neutral-100">
+        <Link
+          href="/watchlist"
+          className="shrink-0 whitespace-nowrap text-sm text-neutral-400 hover:text-neutral-100"
+        >
           观察池
         </Link>
         <Link
           href="/anomalies"
-          className="flex items-center gap-1.5 text-sm text-neutral-400 hover:text-neutral-100"
+          className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-sm text-neutral-400 hover:text-neutral-100"
         >
           异常提醒
           {pendingAnomalies > 0 && (
@@ -31,10 +37,16 @@ export default function DashboardLayout({
             </span>
           )}
         </Link>
-        <Link href="/ledger" className="text-sm text-neutral-400 hover:text-neutral-100">
+        <Link
+          href="/ledger"
+          className="shrink-0 whitespace-nowrap text-sm text-neutral-400 hover:text-neutral-100"
+        >
           流水
         </Link>
-        <Link href="/settings" className="text-sm text-neutral-400 hover:text-neutral-100">
+        <Link
+          href="/settings"
+          className="shrink-0 whitespace-nowrap text-sm text-neutral-400 hover:text-neutral-100"
+        >
           设置
         </Link>
       </nav>
