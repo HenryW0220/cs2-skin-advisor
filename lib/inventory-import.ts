@@ -14,6 +14,7 @@ export interface IImportSummary {
   imported: number;
   backfilled: number;
   removed: number; // Steam 库存里已经没有的资产（卖掉/交易走了），本地对应行被删掉的数量
+  removedNoCostBasis: number; // 同上，但 buy_price=0（开箱/未知来源），不落流水，见下方注释
   skippedNotMarketable: number;
   error?: string;
 }
@@ -98,7 +99,16 @@ export async function importSteamInventory(steamId: string): Promise<IImportSumm
   );
   const c5SalePrices = removedRows.length > 0 ? await fetchRecentC5SalePrices(steamId) : new Map();
   let removed = 0;
+  let removedNoCostBasis = 0;
   for (const row of removedRows) {
+    // buy_price=0 是开箱所得/购入渠道未知（跟 lib/tracked-items.ts 的追踪范围排除逻辑同一套
+    // 业务语义），没有成本价算不出盈亏，这类东西离开库存大概率是开箱消耗掉了而不是真的卖出——
+    // 落一条待用户手填卖价的流水只会制造噪音（武器箱最常见），直接跳过不记录，行照删。
+    if (row.buy_price === 0) {
+      deleteInventoryItem(row.id);
+      removedNoCostBasis += 1;
+      continue;
+    }
     const autoPrice = c5SalePrices.get(row.item_name) ?? null;
     addSaleRecord({
       item_name: row.item_name,
@@ -119,6 +129,7 @@ export async function importSteamInventory(steamId: string): Promise<IImportSumm
     imported,
     backfilled,
     removed,
+    removedNoCostBasis,
     skippedNotMarketable,
   };
 }
