@@ -1,4 +1,11 @@
 import { getDb } from "./client";
+import {
+  getCachedLatestPrices,
+  getCachedPriceHistory,
+  invalidateItemPriceCache,
+  setCachedLatestPrices,
+  setCachedPriceHistory,
+} from "../signal-cache";
 import type { IPriceSnapshot } from "../types";
 
 // 同一 item_name + platform + captured_at 重复写入会被 INSERT OR IGNORE 静默跳过，
@@ -22,6 +29,7 @@ export function insertPriceSnapshot(
       bidding_count: null,
       ...snapshot,
     });
+  invalidateItemPriceCache(snapshot.item_name);
 }
 
 export function getPriceHistory(
@@ -39,13 +47,19 @@ export function getPriceHistory(
       )
       .all(itemName, platform, sinceIso) as IPriceSnapshot[];
   }
-  return db
+  // 不带 sinceIso 的这个变体是持仓/观察池页面的热路径（每个饰品每次渲染都要查一次
+  // 完整历史算 MA/RSI），命中率高，值得缓存；带 sinceIso 的用途各不相同、调用少，不缓存。
+  const cached = getCachedPriceHistory(itemName, platform);
+  if (cached) return cached;
+  const rows = db
     .prepare(
       `SELECT * FROM price_snapshots
        WHERE item_name = ? AND platform = ?
        ORDER BY captured_at ASC`
     )
     .all(itemName, platform) as IPriceSnapshot[];
+  setCachedPriceHistory(itemName, platform, rows);
+  return rows;
 }
 
 // 全表最新一条快照的时间，给定时同步判断"距离上次同步过了多久"用；一条都没有时返回 null。
@@ -59,7 +73,9 @@ export function getLatestSnapshotTime(): string | null {
 // 同一个饰品在各平台最新的一条价格快照，每个 platform 只取 captured_at 最大的那条，
 // 用于跨平台价差计算。
 export function getLatestPricesByPlatform(itemName: string): IPriceSnapshot[] {
-  return getDb()
+  const cached = getCachedLatestPrices(itemName);
+  if (cached) return cached;
+  const rows = getDb()
     .prepare(
       `SELECT ps.* FROM price_snapshots ps
        JOIN (
@@ -73,4 +89,6 @@ export function getLatestPricesByPlatform(itemName: string): IPriceSnapshot[] {
        WHERE ps.item_name = ?`
     )
     .all(itemName, itemName) as IPriceSnapshot[];
+  setCachedLatestPrices(itemName, rows);
+  return rows;
 }
