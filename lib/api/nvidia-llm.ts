@@ -12,8 +12,7 @@ interface IChatCompletionResponse {
   choices: { message: { content: string } }[];
 }
 
-// NVIDIA NIM 兼容 OpenAI chat completions 格式：POST {base}/chat/completions。
-async function chatCompletion(systemPrompt: string, userPrompt: string): Promise<ILlmResult> {
+async function chatCompletionOnce(systemPrompt: string, userPrompt: string): Promise<ILlmResult> {
   try {
     const res = await fetch(`${BASE_URL}/chat/completions`, {
       method: "POST",
@@ -48,6 +47,17 @@ async function chatCompletion(systemPrompt: string, userPrompt: string): Promise
       error: `NVIDIA NIM 请求失败: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+}
+
+// NVIDIA NIM 兼容 OpenAI chat completions 格式：POST {base}/chat/completions。
+// 免费额度的 NIM 接口偶尔会短暂过载（HTTP 503）或网络抖动，失败了等一下重试一次；
+// 真是配置错误（比如 401）重试也没用，但多等一次不会有额外副作用，不值得为了区分错误类型加复杂度。
+async function chatCompletion(systemPrompt: string, userPrompt: string): Promise<ILlmResult> {
+  const first = await chatCompletionOnce(systemPrompt, userPrompt);
+  if (first.data) return first;
+
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  return chatCompletionOnce(systemPrompt, userPrompt);
 }
 
 export async function generateTradeReason(input: {

@@ -29,12 +29,14 @@ export function AiInsight({
       setState("idle");
       return;
     }
-    if (reason || error) {
+    if (reason) {
       setState("open");
       return;
     }
 
+    // reason 为空时（含上次失败的情况）都重新请求一次，失败不该卡住不让重试。
     setState("loading");
+    setError(null);
     try {
       const res = await fetch(
         `/api/signals?itemName=${encodeURIComponent(itemName)}&platform=${encodeURIComponent(platform)}&holding=${holding}&withReason=true`
@@ -60,7 +62,7 @@ export function AiInsight({
         onClick={handleClick}
         className="text-xs text-blue-400 hover:underline"
       >
-        {state === "loading" ? "AI 思考中…" : state === "open" ? "收起" : "AI 建议"}
+        {state === "loading" ? "AI 思考中…" : state === "open" ? "收起" : error ? "重试" : "AI 建议"}
       </button>
       {state === "open" && (
         <p className={`mt-1 text-xs ${error ? "text-red-400" : "text-neutral-400"}`}>
