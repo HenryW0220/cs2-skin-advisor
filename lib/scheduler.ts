@@ -18,7 +18,9 @@ async function runSyncSafely(trigger: string): Promise<void> {
     console.log(
       `[price-sync] ${trigger}: ${summary.itemCount} 个饰品，写入 ${summary.snapshotCount} 条快照` +
         (summary.errors.length > 0 ? `，${summary.errors.length} 个错误（如 ${summary.errors[0].error}）` : "") +
-        (summary.anomaliesDetected > 0 ? `，新发现 ${summary.anomaliesDetected} 个异常波动` : "")
+        (summary.anomaliesDetected > 0 ? `，新发现 ${summary.anomaliesDetected} 个异常波动` : "") +
+        (summary.paperTradesOpened > 0 ? `，模拟盘开仓 ${summary.paperTradesOpened} 笔` : "") +
+        (summary.paperTradesClosed > 0 ? `，模拟盘平仓 ${summary.paperTradesClosed} 笔` : "")
     );
   } catch (err) {
     console.error(`[price-sync] ${trigger} 失败:`, err instanceof Error ? err.message : err);

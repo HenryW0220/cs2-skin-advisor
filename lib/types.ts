@@ -111,6 +111,25 @@ export interface IPushSubscription {
   created_at: string;
 }
 
+// 模拟盘记录，见 db/migrations/016_add_paper_trades.sql。
+export interface IPaperTrade {
+  id: number;
+  item_name: string;
+  platform: string;
+  buy_price: number;
+  buy_score: number;
+  buy_reasons: string; // JSON 数组字符串，展示时 JSON.parse
+  opened_at: string;
+  status: "open" | "closed";
+  sell_price: number | null;
+  sell_net_price: number | null;
+  sell_score: number | null;
+  sell_reasons: string | null;
+  close_reason: "sell_signal" | "timeout" | null;
+  closed_at: string | null;
+  created_at: string;
+}
+
 export interface IWatchlistItem {
   id: number;
   item_name: string;

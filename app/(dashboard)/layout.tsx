@@ -44,6 +44,12 @@ export default function DashboardLayout({
           流水
         </Link>
         <Link
+          href="/paper"
+          className="shrink-0 whitespace-nowrap text-sm text-neutral-400 hover:text-neutral-100"
+        >
+          模拟盘
+        </Link>
+        <Link
           href="/settings"
           className="shrink-0 whitespace-nowrap text-sm text-neutral-400 hover:text-neutral-100"
         >

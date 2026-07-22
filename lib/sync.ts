@@ -2,6 +2,7 @@ import { getProductPrices } from "./api/c5";
 import { getBatchPrice } from "./api/steamdt";
 import { scanForAnomalies } from "./anomaly-scan";
 import { insertPriceSnapshot } from "./db/snapshots";
+import { runPaperTradingTick } from "./paper-trading";
 import { getTrackedItemNames } from "./tracked-items";
 
 export interface ISyncError {
@@ -15,6 +16,8 @@ export interface ISyncSummary {
   snapshotCount: number;
   errors: ISyncError[];
   anomaliesDetected: number;
+  paperTradesOpened: number;
+  paperTradesClosed: number;
 }
 
 // 手动触发的全量价格刷新：SteamDT 和 C5 各批量查一次（不是每个饰品单独调），写进 price_snapshots。
@@ -26,7 +29,14 @@ export async function syncPriceSnapshots(): Promise<ISyncSummary> {
   const errors: ISyncError[] = [];
 
   if (itemNames.length === 0) {
-    return { itemCount: 0, snapshotCount: 0, errors: [], anomaliesDetected: 0 };
+    return {
+      itemCount: 0,
+      snapshotCount: 0,
+      errors: [],
+      anomaliesDetected: 0,
+      paperTradesOpened: 0,
+      paperTradesClosed: 0,
+    };
   }
 
   // getBatchPrice 分块请求时可能部分成功（比如第二块被限流），data 和 error 会同时有值：
@@ -88,5 +98,15 @@ export async function syncPriceSnapshots(): Promise<ISyncSummary> {
   // 得先看到这一轮刚写入的最新快照才能判断"最新一期"正不正常。
   const { eventsCreated } = await scanForAnomalies();
 
-  return { itemCount: itemNames.length, snapshotCount, errors, anomaliesDetected: eventsCreated };
+  // 模拟盘也要在最新快照落库后跑，开仓/平仓价才是这一轮的价格。
+  const paper = runPaperTradingTick();
+
+  return {
+    itemCount: itemNames.length,
+    snapshotCount,
+    errors,
+    anomaliesDetected: eventsCreated,
+    paperTradesOpened: paper.opened,
+    paperTradesClosed: paper.closed,
+  };
 }
