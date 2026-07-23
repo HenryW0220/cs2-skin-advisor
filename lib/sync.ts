@@ -3,6 +3,7 @@ import { getBatchPrice } from "./api/steamdt";
 import { scanForAnomalies } from "./anomaly-scan";
 import { insertPriceSnapshot } from "./db/snapshots";
 import { runPaperTradingTick } from "./paper-trading";
+import { precomputeSignalSummaries } from "./signal-precompute";
 import { getTrackedItemNames } from "./tracked-items";
 
 export interface ISyncError {
@@ -100,6 +101,9 @@ export async function syncPriceSnapshots(): Promise<ISyncSummary> {
 
   // 模拟盘也要在最新快照落库后跑，开仓/平仓价才是这一轮的价格。
   const paper = runPaperTradingTick();
+
+  // 持仓/观察池页面读的信号汇总表，跟着这一轮最新价格重算一遍（见 lib/signal-precompute.ts）。
+  precomputeSignalSummaries(itemNames);
 
   return {
     itemCount: itemNames.length,

@@ -6,8 +6,7 @@ import { RemoveWatchlistButton } from "@/components/features/remove-watchlist-bu
 import { Sparkline } from "@/components/ui/sparkline";
 import { STEAM_ICON_BASE_URL } from "@/lib/api/steam";
 import { listWatchlist } from "@/lib/db/watchlist";
-import { getLatestPricesByPlatform } from "@/lib/db/snapshots";
-import { computeSignalSummary, pickReferencePlatform } from "@/lib/signal-summary";
+import { listSignalSummaries } from "@/lib/db/signal-summaries";
 
 // score 的分段是经验值，跟 lib/rules/evaluate.ts 里 SELL/TRIM 的阈值是对称设计的：
 // >=30 大致对应"明显超卖/趋势走强"，<0 大致对应"超买/趋势走弱"，中间是中性。
@@ -78,13 +77,12 @@ export default async function WatchlistPage({
 
   const watchlist = listWatchlist();
 
+  // 信号（市场价/score/走势）从预计算表读，跟着每小时同步一起算好——见
+  // lib/signal-precompute.ts。score 跟持仓/观察池无关，直接读同一份就行。
+  const summaries = listSignalSummaries();
+
   let rows: IWatchRow[] = watchlist.map((item) => {
-    const latestByPlatform = getLatestPricesByPlatform(item.item_name);
-    const platform = pickReferencePlatform(item.item_name, latestByPlatform);
-    const latest = platform ? latestByPlatform.find((p) => p.platform === platform) : undefined;
-    const summary = platform
-      ? computeSignalSummary(item.item_name, platform, false, latestByPlatform)
-      : null;
+    const summary = summaries.get(item.item_name);
 
     return {
       id: item.id,
@@ -93,11 +91,11 @@ export default async function WatchlistPage({
       iconUrl: item.icon_url,
       targetBuyPrice: item.target_buy_price,
       targetSellPrice: item.target_sell_price,
-      marketPrice: latest?.price ?? null,
-      platform,
-      score: summary?.rule.score ?? null,
-      changeTodayPercent: summary?.changeToday?.percent ?? null,
-      recentPrices: summary?.recentPrices ?? [],
+      marketPrice: summary?.market_price ?? null,
+      platform: summary?.platform ?? null,
+      score: summary?.score ?? null,
+      changeTodayPercent: summary?.change_today_percent ?? null,
+      recentPrices: summary ? (JSON.parse(summary.recent_prices) as number[]) : [],
     };
   });
 

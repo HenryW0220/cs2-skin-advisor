@@ -7,8 +7,7 @@ import { RefreshInventoryButton } from "@/components/features/refresh-inventory-
 import { Sparkline } from "@/components/ui/sparkline";
 import { STEAM_ICON_BASE_URL } from "@/lib/api/steam";
 import { listInventory } from "@/lib/db/inventory";
-import { getLatestPricesByPlatform } from "@/lib/db/snapshots";
-import { computeSignalSummary, pickReferencePlatform } from "@/lib/signal-summary";
+import { listSignalSummaries } from "@/lib/db/signal-summaries";
 import type { ITradeAction } from "@/lib/rules/evaluate";
 
 // 跟着 C5GAME/SteamDT 的习惯走：涨=红，跌=绿（国内行情软件的配色，跟欧美的红跌绿涨反过来）。
@@ -149,23 +148,19 @@ export default async function PositionsPage({
   const sp = await searchParams;
   const showEnglish = sp.lang === "en";
   const query = sp.q?.trim().toLowerCase() ?? "";
-  const merged = sp.merge === "true";
+  const merged = sp.merge !== "false";
   const sortBy = SORT_KEYS.includes(sp.sortBy as ISortKey) ? (sp.sortBy as ISortKey) : undefined;
   const sortDir = sp.sortDir === "asc" ? "asc" : "desc";
 
   const inventory = listInventory();
 
-  // 每个饰品的"各平台最新价"在这一次请求里只查一次，往下传给
-  // pickReferencePlatform/computeSignalSummary 复用——持仓量一大（几百件），
-  // 重复查同一张表是页面变慢的主因，不是网络问题。
+  // 信号（市场价/建议/走势）从预计算表读，跟着每小时同步一起算好，页面不再现场
+  // 对每个饰品重查历史价格算 MA/RSI——见 lib/signal-precompute.ts。
+  const summaries = listSignalSummaries();
+
   const allRows: IPositionRow[] = inventory.map((item) => {
-    const latestByPlatform = getLatestPricesByPlatform(item.item_name);
-    const platform = pickReferencePlatform(item.item_name, latestByPlatform);
-    const latest = platform ? latestByPlatform.find((p) => p.platform === platform) : undefined;
-    const summary = platform
-      ? computeSignalSummary(item.item_name, platform, true, latestByPlatform)
-      : null;
-    const marketPrice = latest?.price ?? null;
+    const summary = summaries.get(item.item_name);
+    const marketPrice = summary?.market_price ?? null;
     // 购入价 0 = 没填 = 自己开箱获得，成本未知不算盈亏（算了会把整个市场价当利润）
     const costKnown = item.buy_price > 0;
     const pnl =
@@ -184,12 +179,12 @@ export default async function PositionsPage({
       buyPrice: item.buy_price,
       buyDate: item.buy_date,
       marketPrice,
-      platform,
-      action: summary?.rule.action ?? null,
+      platform: summary?.platform ?? null,
+      action: summary?.action ?? null,
       pnl,
       pnlPercent,
-      changeTodayPercent: summary?.changeToday?.percent ?? null,
-      recentPrices: summary?.recentPrices ?? [],
+      changeTodayPercent: summary?.change_today_percent ?? null,
+      recentPrices: summary ? (JSON.parse(summary.recent_prices) as number[]) : [],
       editable: true,
     };
   });
@@ -312,7 +307,7 @@ export default async function PositionsPage({
         </form>
         <div className="flex flex-wrap items-center gap-3">
           <Link
-            href={buildHref({ ...sp, merge: merged ? undefined : "true" })}
+            href={buildHref({ ...sp, merge: merged ? "false" : undefined })}
             className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-neutral-400 hover:text-neutral-100"
           >
             <span
