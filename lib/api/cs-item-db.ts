@@ -17,6 +17,14 @@ interface IGroupedSkin {
 interface IUngroupedSkin {
   skin_id: string;
   market_hash_name: string | null;
+  name: string;
+  image: string | null;
+}
+
+interface IAgent {
+  market_hash_name: string | null;
+  name: string;
+  image: string | null;
 }
 
 export interface IItemStructureInfo {
@@ -24,6 +32,13 @@ export interface IItemStructureInfo {
   crate: string | null;
   rarity: string | null;
   rarityRank: number | null;
+}
+
+export interface IItemCatalogEntry {
+  marketHashName: string;
+  nameCn: string;
+  iconUrl: string | null; // Steam CDN 路径（已去掉域名前缀），同 watchlist.icon_url 口径
+  itemType: "skin" | "agent";
 }
 
 interface IResult<T> {
@@ -69,6 +84,50 @@ async function fetchJson<T>(path: string): Promise<IResult<T>> {
  * 两份 JSON 合计约 30MB，调用方应该一次拉取批量使用，不要按单个饰品反复调。
  * 印花、探员、布章等非武器皮肤不在数据集里，映射不到的饰品调用方自行按 null 处理。
  */
+// 数据集里 image 是完整 URL（community.akamai.steamstatic.com/economy/image/xxx），
+// 项目里 icon_url 统一只存路径部分再拼 STEAM_ICON_BASE_URL，这里把域名前缀剥掉。
+function stripIconPrefix(image: string | null): string | null {
+  if (!image) return null;
+  const marker = "/economy/image/";
+  const idx = image.indexOf(marker);
+  return idx === -1 ? null : image.slice(idx + marker.length);
+}
+
+/**
+ * 拉取全量饰品目录（皮肤所有磨损/StatTrak 变体 + 探员），给本地联想搜索的
+ * item_catalog 表用。皮肤约 2.1 万条 + 探员几十条，一次全量拉取批量入库。
+ * 印花/挂件/音乐盒暂时不含——观察池目前只有皮肤和探员，需要时再加对应 JSON。
+ */
+export async function fetchItemCatalogEntries(): Promise<IResult<IItemCatalogEntry[]>> {
+  const [skins, agents] = await Promise.all([
+    fetchJson<IUngroupedSkin[]>("skins_not_grouped.json"),
+    fetchJson<IAgent[]>("agents.json"),
+  ]);
+  if (skins.error || !skins.data) return { data: null, error: skins.error };
+  if (agents.error || !agents.data) return { data: null, error: agents.error };
+
+  const entries: IItemCatalogEntry[] = [];
+  for (const skin of skins.data) {
+    if (!skin.market_hash_name) continue;
+    entries.push({
+      marketHashName: skin.market_hash_name,
+      nameCn: skin.name,
+      iconUrl: stripIconPrefix(skin.image),
+      itemType: "skin",
+    });
+  }
+  for (const agent of agents.data) {
+    if (!agent.market_hash_name) continue;
+    entries.push({
+      marketHashName: agent.market_hash_name,
+      nameCn: agent.name,
+      iconUrl: stripIconPrefix(agent.image),
+      itemType: "agent",
+    });
+  }
+  return { data: entries };
+}
+
 export async function fetchItemStructureMap(): Promise<
   IResult<Map<string, IItemStructureInfo>>
 > {

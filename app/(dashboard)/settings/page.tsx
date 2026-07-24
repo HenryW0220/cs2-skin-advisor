@@ -1,5 +1,6 @@
 import { InstallPrompt } from "@/components/features/install-prompt";
 import { PushNotificationManager } from "@/components/features/push-notification-manager";
+import { SyncItemCatalogButton } from "@/components/features/sync-item-catalog-button";
 
 export default function SettingsPage() {
   return (
@@ -13,6 +14,14 @@ export default function SettingsPage() {
         </p>
         <PushNotificationManager />
         <InstallPrompt />
+      </section>
+      <section className="space-y-3 rounded border border-neutral-800 p-4">
+        <h2 className="text-sm font-medium text-neutral-200">饰品目录</h2>
+        <p className="text-xs text-neutral-500">
+          “加入观察池”的联想搜索查的是本地目录（全量皮肤+探员的中英文名和图标）。
+          新箱子/新探员发布后点一次刷新即可，平时不用管。
+        </p>
+        <SyncItemCatalogButton />
       </section>
     </div>
   );

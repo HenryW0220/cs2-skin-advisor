@@ -75,6 +75,9 @@ export function AddWatchlistForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           item_name: itemName,
+          // 下拉条目自带的中文名/图标直接传给后端，省一次 Steam 查询（服务器 IP 常被 429）
+          name_cn: selected.nameCn,
+          icon_url: selected.iconUrl || null,
           target_buy_price: targetBuyPrice ? Number(targetBuyPrice) : null,
         }),
       });
