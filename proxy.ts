@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 // 部署到公网（Oracle Cloud）之后加的最低限度保护：这个项目是单用户设计，没有登录体系，
 // 一旦有公网IP，任何人拿到地址就能看到持仓/策略/交易记录。本机开发不受影响——
 // 没配 BASIC_AUTH_USER/PASSWORD 时（.env.development 就没配）直接放行，不锁自己。
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const user = process.env.BASIC_AUTH_USER;
   const password = process.env.BASIC_AUTH_PASSWORD;
   if (!user || !password) return NextResponse.next();
