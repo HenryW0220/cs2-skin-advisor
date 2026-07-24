@@ -31,8 +31,8 @@ export interface IPriceSnapshot {
 
 // price_zscore/volume_ratio 是统计异常；manipulation_score 是操盘嫌疑分预警（≥60 触发）；
 // collection_linkage 是"同收藏品上级异动，下级炼金料可能跟涨"的联动预警；washout_signal 是
-// REPORT-B2.md 验证过的洗盘/砸盘指纹（近48h深回撤+高波动），提示性质，不是确定性判断。
-// momentum_chase 是 REPORT-T7.md 验证过的追涨风险（近24h涨幅过大，未来7天大概率回落），
+// REPORT-manipulation-playbook-stages.md 验证过的洗盘/砸盘指纹（近48h深回撤+高波动），提示性质，不是确定性判断。
+// momentum_chase 是 REPORT-t7-actionable-labels.md 验证过的追涨风险（近24h涨幅过大，未来7天大概率回落），
 // 同样是提示性质，不是确定性判断——大涨也可能是主拉升的开始。
 export type IAnomalyMetric =
   | "price_zscore"

@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# CS2 皮肤交易决策助手
 
-## Getting Started
+帮 CS2 皮肤投资者决策"什么时候卖、什么时候买"的个人工具。数据驱动的买卖建议 + 自然语言理由，不做自动交易——交易永远由用户手动执行。
 
-First, run the development server:
+表面是持仓/观察池/信号看板，真正目标是训练一套能识别、最终能预测"操盘"的规则+统计模型（不碰深度学习，样本不够就不上 ML）。
+
+## 技术栈
+
+Next.js 16（App Router）+ TypeScript + better-sqlite3 + Tailwind CSS v4，数据源是 SteamDT/C5Game OpenAPI，理由生成用 NVIDIA NIM（免费 LLM API）。详细规范见 [CLAUDE.md](CLAUDE.md)。
+
+## 本地开发
 
 ```bash
+npm install
+cp .env.local.example .env.local   # 没有这个文件就参考 CLAUDE.md「环境变量」一节手动建
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+打开 [http://localhost:3000](http://localhost:3000)。开发环境默认不跑定时价格同步（`.env.development` 里 `PRICE_SYNC_DISABLED=1`），需要手动 `POST /api/sync` 触发，或者去 `/settings` 点"同步饰品目录"之类的手动同步按钮。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 常用命令
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| 命令 | 作用 |
+|---|---|
+| `npm run dev` | 本地开发服务器（3000 端口） |
+| `npm run build` | 生产构建 |
+| `npm run start` | 跑生产构建（配合 build） |
+| `npm run lint` | ESLint |
+| `npm run test` | Vitest 单元测试（`lib/signals/`、`lib/rules/` 强制要求覆盖） |
 
-## Learn More
+## 文档地图
 
-To learn more about Next.js, take a look at the following resources:
+这个仓库的文档不是"写完就不管"的静态说明，是每次开发会话都要读、要更新的工作文档：
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- **[CLAUDE.md](CLAUDE.md)**（+ 引用的 [AGENTS.md](AGENTS.md)）—— 项目规范：目录结构、编码规范、Git 规范、开发优先级。**任何时候写代码前先读这个**，两个文件名是 Claude Code 工具约定识别的保留名，不要改名。
+- **[HANDOFF.md](HANDOFF.md)** —— 交接文档：当前生产环境架构、部署流程、每次会话的变更摘要、踩过的坑（不要重复踩）。**给完全没有上下文的新会话看的现状文档**。
+- **[PLAN.md](PLAN.md)** —— 路线图：分阶段（A 数据/标注 → B 检测 → C 预测 → D 产品化 → E 多用户）的任务拆解、进度、决策依据。
+- **[REPORT-manipulation-playbook-stages.md](REPORT-manipulation-playbook-stages.md)** —— 操盘剧本六阶段的数据验证报告（低位横盘/吸货/会员进场/洗盘/主拉升/出货）。
+- **[REPORT-prediction-baseline.md](REPORT-prediction-baseline.md)** —— C1/C2 预测模型第一版基线报告，结论是不满足上线门槛，原因和下一步都写在里面。
+- **[REPORT-t7-actionable-labels.md](REPORT-t7-actionable-labels.md)** —— T+7（交易保护新规下 7 天强制锁仓）约束下的可行动买卖标签验证。
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+生产环境是部署在 Oracle Cloud 的 Docker 容器，具体部署/更新流程见 HANDOFF.md「运行架构」一节，不要在这份 README 里重复维护，避免两处不同步。
 
-## Deploy on Vercel
+## 不要做的事
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- 不要自己训练 ML 模型；不要在组件里直接调用外部 API（必须走 `/api/` 路由）；不要把 API key 硬编码；不要一次塞太多功能。完整清单见 CLAUDE.md 底部。

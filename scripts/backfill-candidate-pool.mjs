@@ -1,4 +1,4 @@
-// 给 C1/C2 预测模型的"全市场"候选池补真正的随机样本（REPORT-C1-C2.md 问题一：
+// 给 C1/C2 预测模型的"全市场"候选池补真正的随机样本（REPORT-prediction-baseline.md 问题一：
 // 之前的 full 池只是 131 个用户自己关注的跟踪饰品，不是全市场随机样本，数字偏乐观）。
 //
 // 用法：node scripts/backfill-candidate-pool.mjs [目标样本数，默认500]

@@ -4,7 +4,7 @@
 //
 // 防循环论证的关键设计：分段用变点检测（对 log 价格做分段线性拟合 + BIC 判停），
 // 聚类只看形态特征（涨速/波动/回撤），全程不使用剧本先验；剧本名字只在人工解读时对号入座。
-// 结论写进 REPORT-B2.md，喂 C 阶段（吸货期指纹=买点特征）和 D1（出货期指纹=逃顶信号）。
+// 结论写进 REPORT-manipulation-playbook-stages.md，喂 C 阶段（吸货期指纹=买点特征）和 D1（出货期指纹=逃顶信号）。
 import Database from "better-sqlite3";
 
 const db = new Database("data/db.sqlite", { readonly: true });

@@ -4,12 +4,12 @@ export interface IWashoutSignalResult {
   volatility: number; // 同窗口内小时涨跌幅的波动率（标准差）
 }
 
-// 回撤窗口：REPORT-B2.md 里洗盘簇（c0）的段落时长中位数是 52 小时——比这个短的深跌
+// 回撤窗口：REPORT-manipulation-playbook-stages.md 里洗盘簇（c0）的段落时长中位数是 52 小时——比这个短的深跌
 // 大概率只是单笔挂单造成的瞬时波动，比这个长的深跌更可能是趋势性下跌而非洗盘，
 // 所以往前看 48 小时找局部高点，而不是用更长的周线窗口。
 const DEFAULT_WINDOW_HOURS = 48;
 
-// 回撤阈值：REPORT-B2.md 里洗盘簇最大回撤中位数 20%，最深的单段接近腰斩；
+// 回撤阈值：REPORT-manipulation-playbook-stages.md 里洗盘簇最大回撤中位数 20%，最深的单段接近腰斩；
 // 相邻的"深跌"簇（c1）最大回撤中位数只有 10.2%——取两者中点 15% 当分界，
 // 既不会把普通深跌误判成洗盘，也不会漏掉真实案例（Bullet Rain 17.3%、
 // Rocket Pop 18.0%、Phoenix Blacklight 18.9% 都在这条线以上）。
@@ -21,7 +21,7 @@ const DEFAULT_DRAWDOWN_THRESHOLD = 0.15;
 const DEFAULT_VOLATILITY_THRESHOLD = 0.02;
 
 /**
- * 洗盘/砸盘信号：识别"近期从局部高点深跌"的形态，对应 REPORT-B2.md 里验证过的
+ * 洗盘/砸盘信号：识别"近期从局部高点深跌"的形态，对应 REPORT-manipulation-playbook-stages.md 里验证过的
  * 操盘剧本第 4 阶段（洗盘/砸盘）。这是一个提示性的领先信号，不是确定性判断——
  * 报告里的案例显示深回撤接急拉的组合反复出现，但同样的价格形态也可能只是
  * 正常的趋势性下跌，需要用户结合是否已有拉盘迹象、消息面等自行判断。

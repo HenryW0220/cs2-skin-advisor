@@ -1,7 +1,7 @@
 // 给 market_candidate_pool 里的全市场随机样本补 item_metadata（收藏品/箱子/品质），
 // 让 coMove 规则基准能在完整候选池上公平对比——之前只有原来131个真实跟踪饰品有
 // metadata，363个随机样本没有，coMove 候选数被锁死在115个，跟模型评估的候选池
-// 大小不对等（见 REPORT-C1-C2.md 2026-07-21 复核记录）。
+// 大小不对等（见 REPORT-prediction-baseline.md 2026-07-21 复核记录）。
 //
 // 用法：node scripts/backfill-candidate-pool-metadata.mjs
 // 不需要额外网络请求之外的调用——collection/crate/rarity 数据跟抽样时用的是

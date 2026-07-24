@@ -1,4 +1,4 @@
-// T+7 可行动基线：C1/C2 的下一版预测目标（PLAN.md 原则6 / REPORT-C1-C2.md 2026-07-21）。
+// T+7 可行动基线：C1/C2 的下一版预测目标（PLAN.md 原则6 / REPORT-prediction-baseline.md 2026-07-21）。
 // 用法：node scripts/build-t7-actionable-baseline.mjs
 //
 // 旧标签问的是"未来 N 天内会不会进入操盘窗口"——但 2026-07-15 交易保护新规后买入
@@ -12,12 +12,12 @@
 // 脚本同样各自独立成文件的惯例一致，不额外抽公共模块）。
 //
 // 候选池只用 full（全部跟踪饰品+全市场随机样本）——narrow 池已经证明会虚高
-// （REPORT-C1-C2.md），这版不再重复对比。
+// （REPORT-prediction-baseline.md），这版不再重复对比。
 //
 // 新增基线：动量（追涨，按过去24h涨幅排序买入）——这是不用任何模型、随手就能做的
 // 策略，模型如果赢不了这个，说明它没有提供任何额外价值。
 //
-// 结果解读见 REPORT-T7.md，不要只看这里打印出来的数字：第一版直接照抄
+// 结果解读见 REPORT-t7-actionable-labels.md，不要只看这里打印出来的数字：第一版直接照抄
 // build-prediction-baseline.mjs 的评估方式，同一饰品同一天多个小时级样本没去重，
 // 平均收益被极少数孤例严重灌水（已修复，见 evaluateDaily 里的 dedupeByItem）；
 // 修复后数字依然被少数几个极端赢家主导，"模型打赢基准"方向可信，具体打赢多少
