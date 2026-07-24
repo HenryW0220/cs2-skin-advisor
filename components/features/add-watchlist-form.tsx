@@ -24,6 +24,7 @@ export function AddWatchlistForm() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const requestSeq = useRef(0);
 
   useEffect(() => {
@@ -38,9 +39,15 @@ export function AddWatchlistForm() {
         if (seq === requestSeq.current) {
           setResults(json.data ?? []);
           setShowResults(true);
+          // 之前这里不管接口是不是失败都只看 json.data，查不到和接口挂了在界面上
+          // 长得一模一样（都是空列表），用户没法区分“没这个饰品”还是“该重试了”。
+          setSearchError(!res.ok || json.error ? (json.error ?? `请求失败（HTTP ${res.status}）`) : null);
         }
-      } catch {
-        if (seq === requestSeq.current) setResults([]);
+      } catch (err) {
+        if (seq === requestSeq.current) {
+          setResults([]);
+          setSearchError(err instanceof Error ? err.message : "查询失败");
+        }
       }
     }, 300);
 
@@ -51,6 +58,7 @@ export function AddWatchlistForm() {
     setSelected(item);
     setQuery(item.nameCn);
     setShowResults(false);
+    setSearchError(null);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -102,6 +110,7 @@ export function AddWatchlistForm() {
               if (!value.trim()) {
                 setResults([]);
                 setShowResults(false);
+                setSearchError(null);
               }
             }}
             onFocus={() => results.length > 0 && setShowResults(true)}
@@ -150,8 +159,11 @@ export function AddWatchlistForm() {
         </button>
         {error && <span className="text-xs text-red-400">{error}</span>}
       </form>
-      {!selected && query.trim() && (
-        <p className="text-xs text-neutral-500">请从上面的下拉列表里选中一条饰品</p>
+      {searchError ? (
+        <p className="text-xs text-red-400">联想查询失败：{searchError}，请稍后重试</p>
+      ) : (
+        !selected &&
+        query.trim() && <p className="text-xs text-neutral-500">请从上面的下拉列表里选中一条饰品</p>
       )}
       {warning && <p className="text-xs text-amber-400">{warning}</p>}
     </div>
