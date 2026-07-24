@@ -12,7 +12,8 @@ interface ISearchItem {
 
 // 中文/英文都能搜，本质是代理 Steam 市场的模糊搜索接口——用户从下拉列表里选一条，
 // 提交的就是真实的 market_hash_name，不会再出现名字打错或磨损度不存在的情况。
-// 如果用户不选，直接手打回车提交，也保留原来"按原样当 market_hash_name 提交"的行为。
+// 必须从下拉里选中一条才能提交：以前允许直接把手打的原始文字当 market_hash_name
+// 提交，结果是查不到精确匹配时会在观察池里留下一条永远没有价格/图标的死数据。
 export function AddWatchlistForm() {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -54,8 +55,8 @@ export function AddWatchlistForm() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const itemName = selected?.marketHashName ?? query.trim();
-    if (!itemName) return;
+    if (!selected) return;
+    const itemName = selected.marketHashName;
 
     setSaving(true);
     setError(null);
@@ -142,13 +143,16 @@ export function AddWatchlistForm() {
         />
         <button
           type="submit"
-          disabled={saving || !(selected?.marketHashName ?? query.trim())}
+          disabled={saving || !selected}
           className="rounded border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
         >
           {saving ? "添加中…" : "加入观察池"}
         </button>
         {error && <span className="text-xs text-red-400">{error}</span>}
       </form>
+      {!selected && query.trim() && (
+        <p className="text-xs text-neutral-500">请从上面的下拉列表里选中一条饰品</p>
+      )}
       {warning && <p className="text-xs text-amber-400">{warning}</p>}
     </div>
   );
