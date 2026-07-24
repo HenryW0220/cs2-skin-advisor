@@ -23,6 +23,10 @@ function daysBetween(fromIso: string, toMs: number): number {
   return Math.floor((toMs - new Date(fromIso).getTime()) / (24 * 60 * 60 * 1000));
 }
 
+function heldDaysFromNow(fromIso: string): number {
+  return Math.floor((Date.now() - new Date(fromIso).getTime()) / (24 * 60 * 60 * 1000));
+}
+
 function parseReasons(json: string | null): string[] {
   if (!json) return [];
   try {
@@ -36,7 +40,6 @@ function parseReasons(json: string | null): string[] {
 const T7_LOCK_DAYS = 7;
 
 export default function PaperTradingPage() {
-  const now = Date.now();
   const trades = listPaperTrades();
   const open = trades.filter((t) => t.status === "open");
   const closedTrades = trades.filter((t) => t.status === "closed");
@@ -52,7 +55,7 @@ export default function PaperTradingPage() {
     const currentPrice = latest?.price ?? null;
     const unrealized =
       currentPrice !== null ? netSellPrice(currentPrice, "c5").net - t.buy_price : null;
-    const heldDays = daysBetween(t.opened_at, now);
+    const heldDays = heldDaysFromNow(t.opened_at);
     return { trade: t, currentPrice, unrealized, heldDays, locked: heldDays < T7_LOCK_DAYS };
   });
 
