@@ -3,6 +3,7 @@ import { AddWatchlistForm } from "@/components/features/add-watchlist-form";
 import { AiInsight } from "@/components/features/ai-insight";
 import { RefreshPricesButton } from "@/components/features/refresh-prices-button";
 import { RemoveWatchlistButton } from "@/components/features/remove-watchlist-button";
+import { WatchlistSearchBox } from "@/components/features/watchlist-search-box";
 import { Sparkline } from "@/components/ui/sparkline";
 import { STEAM_ICON_BASE_URL } from "@/lib/api/steam";
 import { listWatchlist } from "@/lib/db/watchlist";
@@ -162,16 +163,15 @@ export default async function WatchlistPage({
       </div>
 
       <div className="flex items-center justify-between gap-3">
-        <form action="/watchlist" method="GET" className="flex items-center gap-2">
-          {sp.lang && <input type="hidden" name="lang" value={sp.lang} />}
-          <input
-            type="text"
-            name="q"
-            defaultValue={sp.q}
-            placeholder="搜索饰品名称（中/英文都行）"
-            className="w-64 rounded border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm placeholder:text-neutral-600 focus:border-neutral-500 focus:outline-none"
-          />
-        </form>
+        <WatchlistSearchBox
+          items={watchlist.map((item) => ({
+            itemName: item.item_name,
+            nameCn: item.name_cn,
+            iconUrl: item.icon_url,
+          }))}
+          defaultValue={sp.q}
+          lang={sp.lang}
+        />
       </div>
 
       <div className="overflow-x-auto rounded-lg border border-neutral-800">
