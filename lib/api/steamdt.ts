@@ -71,25 +71,41 @@ export async function getSinglePrice(
 // 批量接口单次最多 100 个名字，101 个就报 100002 参数错误（实测确认，文档没写）。
 const BATCH_PRICE_MAX_NAMES = 100;
 
-// 超过 100 个名字自动分块串行请求。某一块失败（常见是 4005 限流，这个接口有独立
-// 的小额配额）时不丢弃已成功块的数据：返回拿到的部分 + error，调用方按"哪些饰品
-// 不在返回列表里"判断这轮谁没同步到。
+// 实测确认：这个接口连续请求 2 次就报 4005 限流，要等约 60 秒才恢复
+// （跟 K 线接口的限流规则完全不同，K 线 250ms 间隔连打没事，见 HANDOFF 踩坑 6c）。
+const BATCH_PRICE_CHUNK_DELAY_MS = 60_000;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 超过 100 个名字自动分块串行请求，块间隔 60 秒避开限流。某一块失败（通常还是
+// 4005，说明限流比预期更紧）不放弃后续块——继续跑完剩下的块，把失败块的名字
+// 记进 error 里；调用方（sync.ts）按"哪些饰品不在返回列表里"判断这轮谁没同步到。
 export async function getBatchPrice(
   marketHashNames: string[]
 ): Promise<ISteamDtResult<ISteamDTBatchPriceItem[]>> {
   const merged: ISteamDTBatchPriceItem[] = [];
+  const chunkErrors: string[] = [];
+  const chunks: string[][] = [];
   for (let i = 0; i < marketHashNames.length; i += BATCH_PRICE_MAX_NAMES) {
-    const chunk = marketHashNames.slice(i, i + BATCH_PRICE_MAX_NAMES);
+    chunks.push(marketHashNames.slice(i, i + BATCH_PRICE_MAX_NAMES));
+  }
+
+  for (let i = 0; i < chunks.length; i++) {
+    if (i > 0) await sleep(BATCH_PRICE_CHUNK_DELAY_MS);
     const result = await steamDtRequest<ISteamDTBatchPriceItem[]>("/open/cs2/v1/price/batch", {
       method: "POST",
-      body: { marketHashNames: chunk },
+      body: { marketHashNames: chunks[i] },
     });
     if (result.error || !result.data) {
-      return { data: merged, error: result.error ?? "无数据" };
+      chunkErrors.push(`第${i + 1}/${chunks.length}块(${chunks[i].length}个)失败: ${result.error ?? "无数据"}`);
+      continue;
     }
     merged.push(...result.data);
   }
-  return { data: merged };
+
+  return { data: merged, error: chunkErrors.length > 0 ? chunkErrors.join("; ") : undefined };
 }
 
 // 文档目前只确认 type=1（日线），其他取值未知。
