@@ -56,3 +56,11 @@ export function invalidateItemPriceCache(itemName: string): void {
   latestPricesCache().delete(itemName);
   priceHistoryCache().delete(itemName);
 }
+
+// 单测用：清空全部缓存。这两个 Map 是模块级全局，lib/db/*.test.ts 每个用例都建一个
+// 全新的 :memory: 数据库，但缓存不会跟着重建，上一个用例缓存的数据会泄漏进下一个——
+// 在 beforeEach 里调这个函数隔离。
+export function resetPriceCacheForTesting(): void {
+  latestPricesCache().clear();
+  priceHistoryCache().clear();
+}

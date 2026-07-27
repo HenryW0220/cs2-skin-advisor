@@ -40,17 +40,23 @@ function runMigrations(db: Database.Database): void {
   }
 }
 
-function createConnection(): Database.Database {
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  const db = new Database(DB_PATH);
-  db.pragma("journal_mode = WAL");
+// 参数化成接受任意路径，是为了让 lib/db/testing.ts 能传 ":memory:" 建一个跑过同一套
+// migrations 的临时库给单测用——WAL 模式在内存库上不支持，只给真实文件路径开。
+export function createConnection(dbPath: string): Database.Database {
+  if (dbPath !== ":memory:") {
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  }
+  const db = new Database(dbPath);
+  if (dbPath !== ":memory:") {
+    db.pragma("journal_mode = WAL");
+  }
   runMigrations(db);
   return db;
 }
 
 export function getDb(): Database.Database {
   if (!global.__db) {
-    global.__db = createConnection();
+    global.__db = createConnection(DB_PATH);
   }
   return global.__db;
 }
