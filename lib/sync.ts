@@ -21,6 +21,69 @@ export interface ISyncSummary {
   paperTradesClosed: number;
 }
 
+// syncPriceSnapshots 和 syncC5PricesOnly（C5 高频 tick，见下）都要把 getProductPrices
+// 的分块结果落库，抽成共享函数避免"部分成功时只把没返回的饰品记错误"这段逻辑
+// 在两处各写一份、以后改一个忘了改另一个。
+async function applyC5Prices(
+  itemNames: string[],
+  c5Result: Awaited<ReturnType<typeof getProductPrices>>,
+  capturedAt: string
+): Promise<{ snapshotCount: number; errors: ISyncError[] }> {
+  let snapshotCount = 0;
+  const errors: ISyncError[] = [];
+
+  if (c5Result.data) {
+    for (const itemName of itemNames) {
+      const entry = c5Result.data[itemName];
+      if (!entry) {
+        if (!c5Result.error) errors.push({ itemName, source: "c5", error: "批量响应里没有这个饰品" });
+        continue;
+      }
+      insertPriceSnapshot({
+        item_name: itemName,
+        // 跟 SteamDT 聚合数据里的 "C5" 平台名对齐（大写），不然会被当成两个不同平台。
+        platform: "C5",
+        price: entry.price,
+        volume: entry.count,
+        captured_at: capturedAt,
+      });
+      snapshotCount += 1;
+    }
+  }
+  if (c5Result.error) {
+    const c5Returned = c5Result.data ?? {};
+    for (const itemName of itemNames) {
+      if (!(itemName in c5Returned)) {
+        errors.push({ itemName, source: "c5", error: c5Result.error });
+      }
+    }
+  }
+
+  return { snapshotCount, errors };
+}
+
+// C5 批量报价接口没有 SteamDT 那种"每分钟1次"的硬限流（实测 50 QPS 额度很宽松，见
+// lib/api/c5.ts 的 globalLimiter），独立于整点全量同步之外单独提高 C5 这一路的刷新
+// 频率——只写快照，不跑异常扫描/模拟盘/信号预计算（那三样跟着整点大同步走，避免
+// 高频 tick 意外把扫描负载和模拟盘开平仓节奏也一起放大）。lib/signals/resample.ts
+// 的小时重采样已经保证这批高频快照不会污染信号计算的"数组下标=小时"假设。
+export async function syncC5PricesOnly(): Promise<{
+  itemCount: number;
+  snapshotCount: number;
+  errors: ISyncError[];
+}> {
+  const itemNames = getTrackedItemNames();
+  if (itemNames.length === 0) {
+    return { itemCount: 0, snapshotCount: 0, errors: [] };
+  }
+
+  const capturedAt = new Date().toISOString();
+  const c5Result = await getProductPrices(itemNames);
+  const { snapshotCount, errors } = await applyC5Prices(itemNames, c5Result, capturedAt);
+
+  return { itemCount: itemNames.length, snapshotCount, errors };
+}
+
 // 手动触发的全量价格刷新：SteamDT 和 C5 各批量查一次（不是每个饰品单独调），写进 price_snapshots。
 // 某个数据源整体失败不影响另一个，失败原因收集到 errors 里返回给调用方。
 export async function syncPriceSnapshots(): Promise<ISyncSummary> {
@@ -72,34 +135,11 @@ export async function syncPriceSnapshots(): Promise<ISyncSummary> {
   }
 
   // getProductPrices 分块请求时可能部分成功（比如第三块参数超限），data 和 error 会
-  // 同时有值：先把拿到的都写进去，再把没出现在返回 map 里的饰品记为错误。
+  // 同时有值：applyC5Prices 里先把拿到的都写进去，再把没出现在返回 map 里的饰品记为错误。
   const c5Result = await getProductPrices(itemNames);
-  if (c5Result.data) {
-    for (const itemName of itemNames) {
-      const entry = c5Result.data[itemName];
-      if (!entry) {
-        if (!c5Result.error) errors.push({ itemName, source: "c5", error: "批量响应里没有这个饰品" });
-        continue;
-      }
-      insertPriceSnapshot({
-        item_name: itemName,
-        // 跟 SteamDT 聚合数据里的 "C5" 平台名对齐（大写），不然会被当成两个不同平台。
-        platform: "C5",
-        price: entry.price,
-        volume: entry.count,
-        captured_at: capturedAt,
-      });
-      snapshotCount += 1;
-    }
-  }
-  if (c5Result.error) {
-    const c5Returned = c5Result.data ?? {};
-    for (const itemName of itemNames) {
-      if (!(itemName in c5Returned)) {
-        errors.push({ itemName, source: "c5", error: c5Result.error });
-      }
-    }
-  }
+  const c5Applied = await applyC5Prices(itemNames, c5Result, capturedAt);
+  snapshotCount += c5Applied.snapshotCount;
+  errors.push(...c5Applied.errors);
 
   // 价格写完再扫异常：z-score/成交量基线都是从 price_snapshots 里查历史算的，
   // 得先看到这一轮刚写入的最新快照才能判断"最新一期"正不正常。
