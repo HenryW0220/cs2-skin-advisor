@@ -71,16 +71,14 @@ export async function syncPriceSnapshots(): Promise<ISyncSummary> {
     }
   }
 
+  // getProductPrices 分块请求时可能部分成功（比如第三块参数超限），data 和 error 会
+  // 同时有值：先把拿到的都写进去，再把没出现在返回 map 里的饰品记为错误。
   const c5Result = await getProductPrices(itemNames);
-  if (c5Result.error || !c5Result.data) {
-    for (const itemName of itemNames) {
-      errors.push({ itemName, source: "c5", error: c5Result.error ?? "无数据" });
-    }
-  } else {
+  if (c5Result.data) {
     for (const itemName of itemNames) {
       const entry = c5Result.data[itemName];
       if (!entry) {
-        errors.push({ itemName, source: "c5", error: "批量响应里没有这个饰品" });
+        if (!c5Result.error) errors.push({ itemName, source: "c5", error: "批量响应里没有这个饰品" });
         continue;
       }
       insertPriceSnapshot({
@@ -92,6 +90,14 @@ export async function syncPriceSnapshots(): Promise<ISyncSummary> {
         captured_at: capturedAt,
       });
       snapshotCount += 1;
+    }
+  }
+  if (c5Result.error) {
+    const c5Returned = c5Result.data ?? {};
+    for (const itemName of itemNames) {
+      if (!(itemName in c5Returned)) {
+        errors.push({ itemName, source: "c5", error: c5Result.error });
+      }
     }
   }
 

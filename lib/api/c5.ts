@@ -99,12 +99,42 @@ export async function getSellerOrderList(
   });
 }
 
+// 批量接口没有文档记录的名字数量上限，实测 338 个报 500211（超出参数数值上限）。
+// 取跟 SteamDT 批量接口一致的 100 作为分块大小，没有再往上探边界的必要。
+const PRODUCT_PRICE_MAX_NAMES = 100;
+
+// 分块请求会打这个接口，但没有证据表明它跟 SteamDT 一样有连续请求限流（报错是参数数量
+// 超限，不是限流），所以块间不加 SteamDT 那种 60 秒等待，避免同步耗时被无谓拉长。
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 超过 100 个名字自动分块串行请求，把各块返回的价格 map 合并成一个。某一块失败不放弃
+// 后续块——继续跑完剩下的块，把失败块的名字记进 error 里；调用方（sync.ts）按"哪个
+// 名字不在返回 map 里"判断这轮谁没同步到。
 export async function getProductPrices(
   marketHashNames: string[],
   appId = "730"
 ): Promise<IC5Result<IC5ProductPriceMap>> {
-  return c5Request<IC5ProductPriceMap>("/merchant/product/price/batch", {
-    method: "POST",
-    body: { appId, marketHashNames },
-  });
+  const merged: IC5ProductPriceMap = {};
+  const chunkErrors: string[] = [];
+  const chunks: string[][] = [];
+  for (let i = 0; i < marketHashNames.length; i += PRODUCT_PRICE_MAX_NAMES) {
+    chunks.push(marketHashNames.slice(i, i + PRODUCT_PRICE_MAX_NAMES));
+  }
+
+  for (let i = 0; i < chunks.length; i++) {
+    if (i > 0) await sleep(1_000);
+    const result = await c5Request<IC5ProductPriceMap>("/merchant/product/price/batch", {
+      method: "POST",
+      body: { appId, marketHashNames: chunks[i] },
+    });
+    if (result.error || !result.data) {
+      chunkErrors.push(`第${i + 1}/${chunks.length}块(${chunks[i].length}个)失败: ${result.error ?? "无数据"}`);
+      continue;
+    }
+    Object.assign(merged, result.data);
+  }
+
+  return { data: merged, error: chunkErrors.length > 0 ? chunkErrors.join("; ") : undefined };
 }
