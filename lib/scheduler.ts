@@ -37,7 +37,10 @@ async function runC5FastSyncSafely(): Promise<void> {
     const summary = await syncC5PricesOnly();
     console.log(
       `[c5-fast-sync] ${summary.itemCount} 个饰品，写入 ${summary.snapshotCount} 条快照` +
-        (summary.errors.length > 0 ? `，${summary.errors.length} 个错误（如 ${summary.errors[0].error}）` : "")
+        (summary.errors.length > 0 ? `，${summary.errors.length} 个错误（如 ${summary.errors[0].error}）` : "") +
+        (summary.earlyScanTriggered
+          ? `，检测到短时大幅波动（${summary.earlyScanItems.slice(0, 3).join("、")}${summary.earlyScanItems.length > 3 ? ` 等${summary.earlyScanItems.length}个` : ""}），已提前跑一次完整异常扫描`
+          : "")
     );
   } catch (err) {
     console.error("[c5-fast-sync] 失败:", err instanceof Error ? err.message : err);
