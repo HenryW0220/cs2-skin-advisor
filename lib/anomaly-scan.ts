@@ -5,6 +5,7 @@ import { sendPushNotification } from "./api/web-push";
 import { detectPriceZScoreAnomaly, scanPriceZScoreAnomalies } from "./signals/anomaly";
 import { computeManipulationScore } from "./signals/manipulation-score";
 import { computeMomentumChaseSignal } from "./signals/momentum-chase";
+import { resampleHourly } from "./signals/resample";
 import { detectVolumeAnomaly } from "./signals/volume";
 import { computeWashoutSignal } from "./signals/washout";
 import { pickReferencePlatform } from "./signal-summary";
@@ -59,11 +60,13 @@ export async function scanForAnomalies(): Promise<IAnomalyScanSummary> {
     const latest = history[history.length - 1];
     latestByItem.set(itemName, { platform, captured_at: latest.captured_at, price: latest.price });
     if (latest.price < MIN_PRICE_FOR_ANOMALY_SCAN) continue;
-    const prices = history.map((h) => h.price);
+    // 下面这批信号函数把数组下标当"小时"用，喂之前统一按小时重采样，见 resampleHourly 注释。
+    const hourly = resampleHourly(history);
+    const prices = hourly.map((h) => h.price);
     // K 线回填的快照没有成交量（volume 是 null），如果把 null 当 0 计入基线，
     // 均值会被大量 0 拉到接近 0，真实同步一来任何非零成交量都会被算成几十倍的"异常"——
     // 只用真的有成交量数据的快照参与统计，且只在最新一条快照本身有真实成交量时才检测。
-    const volumeHistory = history.filter((h) => h.volume !== null);
+    const volumeHistory = hourly.filter((h) => h.volume !== null);
 
     const priceResult = detectPriceZScoreAnomaly(prices);
     if (priceResult?.isAnomaly && Number.isFinite(priceResult.zScore)) {
@@ -228,12 +231,13 @@ export function scanHistoricalPriceAnomalies(): IAnomalyScanSummary {
     const history = getPriceHistory(itemName, platform);
     if (history.length === 0) continue;
 
-    const prices = history.map((h) => h.price);
+    const hourly = resampleHourly(history);
+    const prices = hourly.map((h) => h.price);
     const results = scanPriceZScoreAnomalies(prices);
 
     for (const result of results) {
       if (!result.isAnomaly || !Number.isFinite(result.zScore)) continue;
-      const snapshot = history[result.priceIndex];
+      const snapshot = hourly[result.priceIndex];
       if (snapshot.price < MIN_PRICE_FOR_ANOMALY_SCAN) continue;
       const created = addAnomalyEvent({
         item_name: itemName,

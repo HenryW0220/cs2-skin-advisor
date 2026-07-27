@@ -9,6 +9,7 @@ import {
   type IManipulationScoreResult,
 } from "./signals/manipulation-score";
 import { movingAverage } from "./signals/moving-average";
+import { resampleHourly } from "./signals/resample";
 import { rsi } from "./signals/rsi";
 import { detectVolumeAnomaly } from "./signals/volume";
 import type { IPriceSnapshot } from "./types";
@@ -58,10 +59,14 @@ export function computeSignalSummary(
   const history = getPriceHistory(itemName, platform);
   if (history.length === 0) return null;
 
-  const prices = history.map((h) => h.price);
-  const volumes = history.map((h) => h.volume ?? 0);
+  // MA/RSI/成交量异动/嫌疑分这些函数把数组下标当"小时"用，喂之前统一按小时重采样
+  // （见 resampleHourly 注释）；recentPrices（走势图）和 changeToday 走的是原始 history，
+  // 按时间戳查找不受采样频率影响，保留全分辨率数据点更利于图表展示。
+  const hourly = resampleHourly(history);
+  const prices = hourly.map((h) => h.price);
+  const volumes = hourly.map((h) => h.volume ?? 0);
   const latestIndex = prices.length - 1;
-  const latest = history[latestIndex];
+  const latest = hourly[latestIndex];
 
   const signals: ISignalSnapshot = {
     price: prices[latestIndex],
