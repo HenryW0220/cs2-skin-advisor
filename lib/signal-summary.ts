@@ -113,8 +113,10 @@ export function computeSignalSummary(
 }
 
 // 持仓/观察池页面展示"市场价"用哪个平台的数据，按国内玩家实际交易习惯排优先级：
-// C5（直连数据源，最稳定）> BUFF > 悠悠有品 > 其他，STEAM 永远垫底——Steam 余额
-// 有提现折损，标价虚高，不能代表真实能成交的行情价。
+// C5（直连数据源，最稳定）> BUFF > 悠悠有品 > 其他。STEAM/HALOSKINS 不是国内玩家主要
+// 交易平台（Steam 社区市场余额还有提现折损、标价虚高），getLatestPricesByPlatform
+// 已经不收集这两个平台的数据（见 lib/db/snapshots.ts 的 EXCLUDED_PLATFORMS），
+// 不会出现在下面的候选列表里。
 const PLATFORM_PRIORITY = ["C5", "BUFF", "YOUPIN"];
 
 export function pickReferencePlatform(
@@ -131,6 +133,5 @@ export function pickReferencePlatform(
     const hit = candidates.find((p) => p.platform === preferred);
     if (hit) return hit.platform;
   }
-  const nonSteam = candidates.find((p) => p.platform !== "STEAM");
-  return (nonSteam ?? candidates[0]).platform;
+  return candidates[0].platform;
 }

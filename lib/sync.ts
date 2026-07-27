@@ -1,7 +1,7 @@
 import { getProductPrices } from "./api/c5";
 import { getBatchPrice } from "./api/steamdt";
 import { scanForAnomalies } from "./anomaly-scan";
-import { insertPriceSnapshot } from "./db/snapshots";
+import { EXCLUDED_PLATFORMS, insertPriceSnapshot } from "./db/snapshots";
 import { runPaperTradingTick } from "./paper-trading";
 import { precomputeSignalSummaries } from "./signal-precompute";
 import { getTrackedItemNames } from "./tracked-items";
@@ -111,6 +111,7 @@ export async function syncPriceSnapshots(): Promise<ISyncSummary> {
     for (const item of steamDtResult.data) {
       steamDtReturned.add(item.marketHashName);
       for (const platformPrice of item.dataList) {
+        if ((EXCLUDED_PLATFORMS as readonly string[]).includes(platformPrice.platform)) continue;
         insertPriceSnapshot({
           item_name: item.marketHashName,
           platform: platformPrice.platform,

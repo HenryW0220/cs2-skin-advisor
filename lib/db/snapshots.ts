@@ -8,6 +8,14 @@ import {
 } from "../signal-cache";
 import type { IPriceSnapshot } from "../types";
 
+// 不追踪这两个平台：都不是国内玩家实际交易的地方（HALOSKINS 是海外小众平台；STEAM
+// 社区市场余额提现有折损、标价虚高，早就在 pickReferencePlatform 里垫底，2026-07-27
+// 起直接不收集）。lib/sync.ts 写入 SteamDT 批量数据前按这个名单过滤，这里同时把这两个
+// 平台从查询结果里排除，之前已经写进 price_snapshots 的历史行不再被任何页面/信号读到
+// （不删历史行，只是不再展示——真要清空间再单独处理）。
+export const EXCLUDED_PLATFORMS = ["STEAM", "HALOSKINS"] as const;
+const EXCLUDED_PLATFORMS_PLACEHOLDERS = EXCLUDED_PLATFORMS.map(() => "?").join(",");
+
 // 同一 item_name + platform + captured_at 重复写入会被 INSERT OR IGNORE 静默跳过，
 // 方便定时任务重复拉取同一时间点的数据时不报错。
 // bidding_price/bidding_count 是求购侧挂单深度，C5 直连价格数据没有这两项，调用方不传时存 null。
@@ -81,14 +89,14 @@ export function getLatestPricesByPlatform(itemName: string): IPriceSnapshot[] {
        JOIN (
          SELECT platform, MAX(captured_at) AS max_captured_at
          FROM price_snapshots
-         WHERE item_name = ?
+         WHERE item_name = ? AND platform NOT IN (${EXCLUDED_PLATFORMS_PLACEHOLDERS})
          GROUP BY platform
        ) latest
          ON ps.platform = latest.platform
         AND ps.captured_at = latest.max_captured_at
        WHERE ps.item_name = ?`
     )
-    .all(itemName, itemName) as IPriceSnapshot[];
+    .all(itemName, ...EXCLUDED_PLATFORMS, itemName) as IPriceSnapshot[];
   setCachedLatestPrices(itemName, rows);
   return rows;
 }
