@@ -253,6 +253,13 @@ export default function PaperTradingPage() {
                           <span className="rounded bg-blue-500/15 px-2 py-0.5 text-xs text-blue-400">
                             卖出信号
                           </span>
+                        ) : t.close_reason === "stale_data" ? (
+                          <span
+                            className="rounded bg-amber-500/15 px-2 py-0.5 text-xs text-amber-400"
+                            title="价格数据中断后按最后已知价格强制平仓，成交价不是决策当时的价，统计胜率时应剔除"
+                          >
+                            数据中断
+                          </span>
                         ) : (
                           <span className="rounded bg-neutral-500/15 px-2 py-0.5 text-xs text-neutral-400">
                             超时平仓

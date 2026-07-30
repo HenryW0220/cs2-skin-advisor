@@ -111,6 +111,10 @@ export interface IPushSubscription {
   created_at: string;
 }
 
+// 平仓原因。stale_data 是"数据中断后按最后已知价格强制平掉"，成交价不是决策当时的价，
+// 统计胜率时要单独剔出去，不能跟前两种正常平仓混在一起算（见 lib/paper-trading.ts）。
+export type PaperTradeCloseReason = "sell_signal" | "timeout" | "stale_data";
+
 // 模拟盘记录，见 db/migrations/016_add_paper_trades.sql。
 export interface IPaperTrade {
   id: number;
@@ -125,7 +129,7 @@ export interface IPaperTrade {
   sell_net_price: number | null;
   sell_score: number | null;
   sell_reasons: string | null;
-  close_reason: "sell_signal" | "timeout" | null;
+  close_reason: PaperTradeCloseReason | null;
   closed_at: string | null;
   created_at: string;
 }

@@ -20,7 +20,7 @@ const state = vi.hoisted(() => {
     sell_net_price: number | null;
     sell_score: number | null;
     sell_reasons: string[] | null;
-    close_reason: "sell_signal" | "timeout" | null;
+    close_reason: "sell_signal" | "timeout" | "stale_data" | null;
     closed_at: string | null;
   }
 
@@ -37,6 +37,8 @@ const state = vi.hoisted(() => {
     // itemName -> 固定信号，或 (holding) => 信号（同一轮里开仓/平仓两处调用用不同结果时用）
     summaries: {} as Record<string, MockSignal | ((holding: boolean) => MockSignal | null)>,
     platforms: {} as Record<string, string | null>,
+    // itemName -> 各平台最后一条已知快照。信号窗口内没数据但要按最后已知价强制平仓时才读。
+    latestPrices: {} as Record<string, { platform: string; price: number; captured_at: string }[]>,
   };
 });
 
@@ -74,9 +76,9 @@ vi.mock("./db/paper-trades", () => ({
     id: number;
     sell_price: number;
     sell_net_price: number;
-    sell_score: number;
+    sell_score: number | null;
     sell_reasons: string[];
-    close_reason: "sell_signal" | "timeout";
+    close_reason: "sell_signal" | "timeout" | "stale_data";
     closed_at: string;
   }) => {
     const trade = state.trades.find((t) => t.id === input.id && t.status === "open");
@@ -87,6 +89,10 @@ vi.mock("./db/paper-trades", () => ({
 
 vi.mock("./db/watchlist", () => ({
   listWatchlist: () => state.watchlistItems.map((item_name) => ({ item_name })),
+}));
+
+vi.mock("./db/snapshots", () => ({
+  getLatestPricesByPlatform: (itemName: string) => state.latestPrices[itemName] ?? [],
 }));
 
 vi.mock("./signal-summary", () => ({
@@ -113,6 +119,7 @@ beforeEach(() => {
   state.watchlistItems = [];
   state.summaries = {};
   state.platforms = {};
+  state.latestPrices = {};
 });
 
 describe("runPaperTradingTick — 开仓", () => {
@@ -326,9 +333,52 @@ describe("runPaperTradingTick — 平仓", () => {
     expect(state.trades[0].status).toBe("open");
   });
 
-  it("拿不到信号快照的持仓本轮跳过，不平仓也不报错", () => {
-    seedOpenTrade({ opened_at: isoDaysAgo(31) });
+  it("拿不到信号快照但还没超时的持仓本轮跳过，不平仓也不报错", () => {
+    seedOpenTrade({ opened_at: isoDaysAgo(10) });
     // 不设置 summaries["Item A"]
+
+    const result = runPaperTradingTick();
+
+    expect(result.closed).toBe(0);
+    expect(state.trades[0].status).toBe("open");
+  });
+
+  // 饰品被移出观察池后停止同步，SIGNAL_HISTORY_WINDOW_DAYS 天后滑出信号窗口，
+  // computeSignalSummary 返回 null。修复前这类仓位会永远挂着不进统计。
+  it("信号数据中断且已超时的持仓按最后已知价强制平仓，标记成 stale_data", () => {
+    seedOpenTrade({ opened_at: isoDaysAgo(31), buy_price: 10 });
+    // 不设置 summaries["Item A"]——信号窗口内没数据
+    state.latestPrices["Item A"] = [
+      { platform: "C5", price: 20, captured_at: "2026-07-01T00:00:00.000Z" },
+    ];
+
+    const result = runPaperTradingTick();
+
+    expect(result.closed).toBe(1);
+    const trade = state.trades[0];
+    expect(trade.status).toBe("closed");
+    expect(trade.close_reason).toBe("stale_data");
+    expect(trade.sell_price).toBe(20);
+    expect(trade.sell_net_price).toBeCloseTo(19.8, 6); // 同样扣 C5 1% 手续费
+    // 没有信号可读，score 存 null 而不是 0——0 会被误读成"算出来是中性分"
+    expect(trade.sell_score).toBeNull();
+  });
+
+  it("信号数据中断、已超时、但连最后已知价都查不到时保持开仓", () => {
+    seedOpenTrade({ opened_at: isoDaysAgo(31) });
+    // 既没有 summaries 也没有 latestPrices
+
+    const result = runPaperTradingTick();
+
+    expect(result.closed).toBe(0);
+    expect(state.trades[0].status).toBe("open");
+  });
+
+  it("最后已知价里没有开仓那个平台时保持开仓，不拿别的平台的价顶替", () => {
+    seedOpenTrade({ opened_at: isoDaysAgo(31) });
+    state.latestPrices["Item A"] = [
+      { platform: "BUFF", price: 99, captured_at: "2026-07-01T00:00:00.000Z" },
+    ];
 
     const result = runPaperTradingTick();
 

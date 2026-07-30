@@ -1,5 +1,5 @@
 import { getDb } from "./client";
-import type { IPaperTrade } from "../types";
+import type { IPaperTrade, PaperTradeCloseReason } from "../types";
 
 export function listPaperTrades(): IPaperTrade[] {
   return getDb()
@@ -51,9 +51,10 @@ export function closePaperTrade(input: {
   id: number;
   sell_price: number;
   sell_net_price: number;
-  sell_score: number;
+  // stale_data 平仓时没有信号快照可读，score 存 null（区别于"算出来是 0 分"）
+  sell_score: number | null;
   sell_reasons: string[];
-  close_reason: "sell_signal" | "timeout";
+  close_reason: PaperTradeCloseReason;
   closed_at: string;
 }): void {
   getDb()

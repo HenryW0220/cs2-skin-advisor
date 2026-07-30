@@ -5,6 +5,7 @@ import {
   listOpenPaperTrades,
   openPaperTrade,
 } from "./db/paper-trades";
+import { getLatestPricesByPlatform } from "./db/snapshots";
 import { listWatchlist } from "./db/watchlist";
 import { netSellPrice } from "./fees";
 import { computeSignalSummary, pickReferencePlatform } from "./signal-summary";
@@ -54,14 +55,38 @@ export function runPaperTradingTick(): IPaperTradingSummary {
 
   // 先平后开：同一轮里刚平仓的饰品受再开仓冷却约束，顺序反了会平仓当小时就重新买回来。
   for (const trade of listOpenPaperTrades()) {
-    const summary = computeSignalSummary(trade.item_name, trade.platform, true);
-    if (!summary) continue;
-
     const heldMs = now - new Date(trade.opened_at).getTime();
     if (heldMs < T7_LOCK_MS) continue;
 
-    const sellSignal = summary.rule.action === "SELL";
     const timedOut = heldMs >= MAX_HOLD_MS;
+    const summary = computeSignalSummary(trade.item_name, trade.platform, true);
+
+    // 信号窗口内一条快照都没有——饰品被移出观察池后就不再同步，SIGNAL_HISTORY_WINDOW_DAYS
+    // 天后它就滑出窗口了。没数据判断不了卖出信号，但也不能让仓位永远挂着不进统计
+    // （不平仓 = 这笔决策永远没有结论，是模拟盘验证实验里最没用的一种状态）：
+    // 超过最长持有期照样平掉，按最后一条已知快照价成交。close_reason 单独标记成
+    // stale_data，因为成交价不是"决策当时"的价，评估胜率时要把这批剔掉。
+    if (!summary) {
+      if (!timedOut) continue;
+      const lastKnown = getLatestPricesByPlatform(trade.item_name).find(
+        (p) => p.platform === trade.platform
+      );
+      if (!lastKnown) continue;
+
+      closePaperTrade({
+        id: trade.id,
+        sell_price: lastKnown.price,
+        sell_net_price: netSellPrice(lastKnown.price, SELL_FEE_KEY).net,
+        sell_score: null,
+        sell_reasons: [`价格数据中断（最后一条快照 ${lastKnown.captured_at}），按最后已知价格强制平仓`],
+        close_reason: "stale_data",
+        closed_at: new Date(now).toISOString(),
+      });
+      closed += 1;
+      continue;
+    }
+
+    const sellSignal = summary.rule.action === "SELL";
     if (!sellSignal && !timedOut) continue;
 
     closePaperTrade({
