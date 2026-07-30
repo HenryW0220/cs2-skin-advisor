@@ -1,4 +1,4 @@
-import { getLatestPricesByPlatform, getPriceHistory } from "./db/snapshots";
+import { getLatestPricesByPlatform, getRecentPriceHistory } from "./db/snapshots";
 import { evaluateSignals, type IRuleResult, type ISignalSnapshot } from "./rules/evaluate";
 import {
   computeCrossPlatformSpread,
@@ -56,7 +56,7 @@ export function computeSignalSummary(
   holding: boolean,
   prefetchedLatestByPlatform?: IPriceSnapshot[]
 ): ISignalSummary | null {
-  const history = getPriceHistory(itemName, platform);
+  const history = getRecentPriceHistory(itemName, platform);
   if (history.length === 0) return null;
 
   // MA/RSI/成交量异动/嫌疑分这些函数把数组下标当"小时"用，喂之前统一按小时重采样

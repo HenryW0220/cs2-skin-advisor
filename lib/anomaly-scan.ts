@@ -1,6 +1,6 @@
 import { addAnomalyEvent, hasRecentAnomalyEvent } from "./db/anomaly-events";
 import { listItemMetadata } from "./db/item-metadata";
-import { getPriceHistory } from "./db/snapshots";
+import { getPriceHistory, getRecentPriceHistory } from "./db/snapshots";
 import { sendPushNotification } from "./api/web-push";
 import { detectPriceZScoreAnomaly, scanPriceZScoreAnomalies } from "./signals/anomaly";
 import { computeManipulationScore } from "./signals/manipulation-score";
@@ -54,7 +54,7 @@ export async function scanForAnomalies(): Promise<IAnomalyScanSummary> {
     const platform = pickReferencePlatform(itemName);
     if (!platform) continue;
 
-    const history = getPriceHistory(itemName, platform);
+    const history = getRecentPriceHistory(itemName, platform);
     if (history.length === 0) continue;
 
     const latest = history[history.length - 1];

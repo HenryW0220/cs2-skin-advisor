@@ -1,10 +1,8 @@
 import { getDb } from "./client";
 import {
   getCachedLatestPrices,
-  getCachedPriceHistory,
   invalidateItemPriceCache,
   setCachedLatestPrices,
-  setCachedPriceHistory,
 } from "../signal-cache";
 import type { IPriceSnapshot } from "../types";
 
@@ -40,6 +38,16 @@ export function insertPriceSnapshot(
   invalidateItemPriceCache(snapshot.item_name);
 }
 
+// 信号计算最多往回看多少天。所有信号函数的回溯需求里最长的是嫌疑分的
+// `hourlyPrices.slice(-169, -1)`（169 个小时桶），价格 z-score 和成交量异动都是 168 期，
+// 洗盘 48 期、追涨 24 期、MA30/RSI14 更短，走势图用的 recentPrices 是近 7 天——
+// 折算成时间是 7.05 天，取 21 天留 3 倍余量，同步中断留下数据空洞时也够填满窗口。
+//
+// 之所以必须有这个上限而不是每次读全量：C5 高频 tick（10 分钟一次）让单个饰品每天多
+// 144 行快照，历史长度会无上限地涨，而异常扫描/模拟盘/信号预计算都是"遍历全部追踪
+// 饰品"的循环，读全量等于每小时把整张表搬进内存一遍。
+export const SIGNAL_HISTORY_WINDOW_DAYS = 21;
+
 export function getPriceHistory(
   itemName: string,
   platform: IPriceSnapshot["platform"],
@@ -55,19 +63,35 @@ export function getPriceHistory(
       )
       .all(itemName, platform, sinceIso) as IPriceSnapshot[];
   }
-  // 不带 sinceIso 的这个变体是持仓/观察池页面的热路径（每个饰品每次渲染都要查一次
-  // 完整历史算 MA/RSI），命中率高，值得缓存；带 sinceIso 的用途各不相同、调用少，不缓存。
-  const cached = getCachedPriceHistory(itemName, platform);
-  if (cached) return cached;
-  const rows = db
+  // 全量历史只给"确实需要看完整 90 天"的两个地方用：饰品详情页图表的"全部"区间、
+  // 一次性回溯扫描（scanHistoricalPriceAnomalies）。这里刻意不缓存——单个饰品几千行，
+  // 缓存住会让遍历全部追踪饰品的批处理循环把所有历史同时留在堆里（338 个饰品 × 约
+  // 3300 行 ≈ 440MB，正好撑爆云端 1GB 机器的 Node 堆，2026-07-27 起每小时 OOM 崩溃
+  // 一次就是这么来的）。信号计算走 getRecentPriceHistory，不要用这个。
+  return db
     .prepare(
       `SELECT * FROM price_snapshots
        WHERE item_name = ? AND platform = ?
        ORDER BY captured_at ASC`
     )
     .all(itemName, platform) as IPriceSnapshot[];
-  setCachedPriceHistory(itemName, platform, rows);
-  return rows;
+}
+
+/**
+ * 信号计算专用的价格历史：只取最近 SIGNAL_HISTORY_WINDOW_DAYS 天，按 captured_at 升序。
+ *
+ * 信号函数都是从数组末尾往回取固定期数（见 SIGNAL_HISTORY_WINDOW_DAYS 的推导），
+ * 截掉更早的数据不影响任何指标结果。
+ *
+ * @param days 覆盖默认窗口，单位是天；只在测试或一次性脚本里需要传
+ */
+export function getRecentPriceHistory(
+  itemName: string,
+  platform: IPriceSnapshot["platform"],
+  days: number = SIGNAL_HISTORY_WINDOW_DAYS
+): IPriceSnapshot[] {
+  const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  return getPriceHistory(itemName, platform, sinceIso);
 }
 
 // 全表最新一条快照的时间，给定时同步判断"距离上次同步过了多久"用；一条都没有时返回 null。

@@ -16,11 +16,17 @@ vi.mock("./client", async (importActual) => {
 });
 
 import {
+  SIGNAL_HISTORY_WINDOW_DAYS,
   getLatestPricesByPlatform,
   getLatestSnapshotTime,
   getPriceHistory,
+  getRecentPriceHistory,
   insertPriceSnapshot,
 } from "./snapshots";
+
+function isoDaysAgo(days: number): string {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
 
 beforeEach(() => {
   testDb = createTestDb();
@@ -124,29 +130,90 @@ describe("insertPriceSnapshot / getPriceHistory", () => {
     expect(history.map((h) => h.price)).toEqual([110]);
   });
 
-  it("插入新快照会让 getPriceHistory 的缓存失效，不会读到旧结果", () => {
+  it("不存在的饰品返回空数组", () => {
+    expect(getPriceHistory("不存在的饰品", "C5")).toEqual([]);
+  });
+});
+
+describe("getRecentPriceHistory", () => {
+  it("默认窗口足够长，能覆盖信号函数最长的回溯需求（嫌疑分要 169 个小时桶）", () => {
+    expect(SIGNAL_HISTORY_WINDOW_DAYS * 24).toBeGreaterThanOrEqual(169);
+  });
+
+  it("截掉窗口之外的旧快照，只返回窗口内的", () => {
     insertPriceSnapshot({
       item_name: "AK-47 | Redline",
       platform: "C5",
       price: 100,
       volume: 5,
-      captured_at: "2026-07-01T00:00:00.000Z",
+      captured_at: isoDaysAgo(SIGNAL_HISTORY_WINDOW_DAYS + 5),
     });
-    expect(getPriceHistory("AK-47 | Redline", "C5")).toHaveLength(1); // 触发缓存写入
-
     insertPriceSnapshot({
       item_name: "AK-47 | Redline",
       platform: "C5",
-      price: 105,
+      price: 110,
       volume: 5,
-      captured_at: "2026-07-01T01:00:00.000Z",
+      captured_at: isoDaysAgo(1),
     });
 
-    expect(getPriceHistory("AK-47 | Redline", "C5")).toHaveLength(2);
+    const history = getRecentPriceHistory("AK-47 | Redline", "C5");
+
+    expect(history.map((h) => h.price)).toEqual([110]);
   });
 
-  it("不存在的饰品返回空数组", () => {
-    expect(getPriceHistory("不存在的饰品", "C5")).toEqual([]);
+  it("窗口内的快照按时间升序返回（信号函数都从数组末尾往回取，顺序不能乱）", () => {
+    insertPriceSnapshot({
+      item_name: "AK-47 | Redline",
+      platform: "C5",
+      price: 100,
+      volume: 5,
+      captured_at: isoDaysAgo(1),
+    });
+    insertPriceSnapshot({
+      item_name: "AK-47 | Redline",
+      platform: "C5",
+      price: 90,
+      volume: 5,
+      captured_at: isoDaysAgo(3),
+    });
+
+    const history = getRecentPriceHistory("AK-47 | Redline", "C5");
+
+    expect(history.map((h) => h.price)).toEqual([90, 100]);
+  });
+
+  it("可以传 days 覆盖默认窗口", () => {
+    insertPriceSnapshot({
+      item_name: "AK-47 | Redline",
+      platform: "C5",
+      price: 100,
+      volume: 5,
+      captured_at: isoDaysAgo(5),
+    });
+
+    expect(getRecentPriceHistory("AK-47 | Redline", "C5", 2)).toEqual([]);
+    expect(getRecentPriceHistory("AK-47 | Redline", "C5", 10)).toHaveLength(1);
+  });
+
+  it("只按 item_name+platform 过滤，不串到别的平台", () => {
+    insertPriceSnapshot({
+      item_name: "AK-47 | Redline",
+      platform: "C5",
+      price: 100,
+      volume: 5,
+      captured_at: isoDaysAgo(1),
+    });
+    insertPriceSnapshot({
+      item_name: "AK-47 | Redline",
+      platform: "BUFF",
+      price: 105,
+      volume: 5,
+      captured_at: isoDaysAgo(1),
+    });
+
+    const history = getRecentPriceHistory("AK-47 | Redline", "C5");
+
+    expect(history.map((h) => h.platform)).toEqual(["C5"]);
   });
 });
 
