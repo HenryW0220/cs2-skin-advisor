@@ -8,7 +8,11 @@ vi.mock("./client", async (importActual) => {
   return { ...actual, getDb: () => testDb };
 });
 
-import { listSignalSummaries, upsertSignalSummary } from "./signal-summaries";
+import {
+  getLastFullSyncTime,
+  listSignalSummaries,
+  upsertSignalSummary,
+} from "./signal-summaries";
 
 beforeEach(() => {
   testDb = createTestDb();
@@ -67,5 +71,27 @@ describe("signal-summaries", () => {
       action: "SELL",
       score: -50,
     });
+  });
+});
+
+describe("getLastFullSyncTime", () => {
+  it("没跑过完整同步时返回 null", () => {
+    expect(getLastFullSyncTime()).toBeNull();
+  });
+
+  // 这是调度器判断"启动要不要补跑完整同步"的唯一依据，语义必须是"完整同步跑完的时间"。
+  // 之前用的是 price_snapshots 的最新写入时间，被每 10 分钟一次的 C5 高频 tick 顶得永远
+  // 是新的，导致补跑永远不触发、每次部署后完整同步停摆最多一小时。
+  it("有记录时返回最新的 computed_at", () => {
+    upsertSignalSummary({
+      item_name: "AK-47 | Redline",
+      platform: "C5",
+      market_price: 100,
+      action: "HOLD",
+      score: 10,
+      change_today_percent: null,
+      recent_prices: [100],
+    });
+    expect(getLastFullSyncTime()).toEqual(expect.any(String));
   });
 });

@@ -18,7 +18,6 @@ vi.mock("./client", async (importActual) => {
 import {
   SIGNAL_HISTORY_WINDOW_DAYS,
   getLatestPricesByPlatform,
-  getLatestSnapshotTime,
   getPriceHistory,
   getRecentPriceHistory,
   insertPriceSnapshot,
@@ -214,24 +213,6 @@ describe("getRecentPriceHistory", () => {
     const history = getRecentPriceHistory("AK-47 | Redline", "C5");
 
     expect(history.map((h) => h.platform)).toEqual(["C5"]);
-  });
-});
-
-describe("getLatestSnapshotTime", () => {
-  it("表为空时返回 null", () => {
-    expect(getLatestSnapshotTime()).toBeNull();
-  });
-
-  it("有数据时返回非空时间字符串", () => {
-    insertPriceSnapshot({
-      item_name: "AK-47 | Redline",
-      platform: "C5",
-      price: 100,
-      volume: 5,
-      captured_at: "2026-07-01T00:00:00.000Z",
-    });
-
-    expect(getLatestSnapshotTime()).toEqual(expect.any(String));
   });
 });
 

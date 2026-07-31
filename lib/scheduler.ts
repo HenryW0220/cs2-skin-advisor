@@ -1,4 +1,4 @@
-import { getLatestSnapshotTime } from "./db/snapshots";
+import { getLastFullSyncTime } from "./db/signal-summaries";
 import { syncC5PricesOnly, syncPriceSnapshots } from "./sync";
 
 // 技术指标（MA7/MA30/RSI14）需要连续的历史数据，只靠手动点"刷新价格"会断档，
@@ -69,15 +69,20 @@ export function startPriceSyncScheduler(): void {
   // 不阻止进程退出（比如 next build 之后的脚本收尾）。
   globalScheduler.__priceSyncTimer.unref?.();
 
-  // 启动时距离上次同步超过一个间隔就立即补一次；刚同步过就不补，
+  // 启动时距离上次**完整同步**超过一个间隔就立即补一次；刚同步过就不补，
   // 避免 dev 服务器反复重启时每次都打一轮 API。
-  const latest = getLatestSnapshotTime();
+  //
+  // 判断依据必须是"完整同步跑完的时间"而不是"最近写过快照的时间"——C5 高频 tick
+  // 每 10 分钟写一次快照，用后者的话这里永远算出几分钟、补跑永远不触发，而定时器
+  // 又是从启动时刻重新计时的，结果是**每次部署都让异常扫描/模拟盘/信号预计算停摆
+  // 最多一小时**（2026-07-31 实测停了两小时，页面数据一直显示两小时前的价）。
+  const latest = getLastFullSyncTime();
   const staleMs = latest ? Date.now() - parseSqliteUtc(latest) : Infinity;
   if (staleMs >= SYNC_INTERVAL_MS) {
     void runSyncSafely("启动补跑");
   } else {
     const minutes = Math.round(staleMs / 60000);
-    console.log(`[price-sync] 上次同步是 ${minutes} 分钟前，跳过启动补跑，定时器已挂上（每小时一次）`);
+    console.log(`[price-sync] 上次完整同步是 ${minutes} 分钟前，跳过启动补跑，定时器已挂上（每小时一次）`);
   }
 
   // 独立开关：出问题时不用碰整点大同步，改 C5_FAST_SYNC_DISABLED=1 重启容器就能单独关掉
