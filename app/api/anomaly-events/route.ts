@@ -2,7 +2,14 @@ import { NextResponse } from "next/server";
 import { listAnomalyEvents } from "@/lib/db/anomaly-events";
 import type { IAnomalyStatus } from "@/lib/types";
 
-const VALID_STATUS: IAnomalyStatus[] = ["pending", "confirmed", "dismissed"];
+// 只是 GET 的查询过滤白名单，不是"允许写入的状态"——写入走 [id]/confirm 和 [id]/dismiss。
+const VALID_STATUS: IAnomalyStatus[] = [
+  "pending",
+  "confirmed",
+  "external",
+  "dismissed",
+  "archived",
+];
 
 export async function GET(request: Request) {
   try {

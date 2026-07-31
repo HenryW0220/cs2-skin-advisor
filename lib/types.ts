@@ -43,7 +43,19 @@ export type IAnomalyMetric =
   | "momentum_chase";
 // confirmed=确认操盘（正样本）；external=外部事件驱动的真实行情（版本更新/炼金开放/
 // 大赛等，困难负样本，review_note 记录具体事件）；dismissed=正常波动（普通负样本）。
-export type IAnomalyStatus = "pending" | "confirmed" | "external" | "dismissed";
+//
+// archived=**机器按机械规则移出审核队列，没有经过人工判断**，跟 dismissed 有本质区别：
+// dismissed 是"人看过，判断这是正常波动"，是一条真实的负标签；archived 只是"这条不值得
+// 占用人的注意力"（开箱品无从判断、低价品的波动是报价精度的机械结果）。现在的特征分析
+// 脚本只读 manipulation_tags（正类）和 status='external'（排除窗口），两者都不读，所以
+// 对训练结果没差别；但 007 迁移的注释写明了 dismissed 将来要当负样本用，到那时必须能分清
+// 哪些是人判断过的、哪些是机器归档的——所以这里单开一个状态，不复用 dismissed。
+export type IAnomalyStatus =
+  | "pending"
+  | "confirmed"
+  | "external"
+  | "dismissed"
+  | "archived";
 
 // 自动异常检测（无需标签）产生的候选事件，见 db/migrations/007_add_anomaly_events.sql。
 export interface IAnomalyEvent {

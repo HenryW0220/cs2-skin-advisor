@@ -14,8 +14,10 @@ import { computeSignalSummary, pickReferencePlatform } from "./signal-summary";
 // 纯"趋势走强"只有 +15，作为买入依据太弱，会把模拟盘灌满噪声交易。
 const ENTRY_MIN_SCORE = 30;
 
-// 几分钱的印花价格本身就是一分两分地跳，模拟收益全是价格粒度的机械结果，
-// 和 lib/anomaly-scan.ts 的 MIN_PRICE_FOR_ANOMALY_SCAN 同理，挡在入口。
+// 几分钱的印花价格本身就是一分两分地跳，模拟收益全是价格粒度的机械结果，挡在入口。
+// 出发点和 lib/anomaly-scan.ts 的 MIN_PRICE_FOR_ANOMALY_SCAN 一样，但**数值不同且是有意的**：
+// 那边 2026-07-31 按人工审核确认率提到了 5，这边没有对应的实测依据（模拟盘至今零平仓，
+// 没有已实现收益能用来回算低价品的信噪比），所以维持 1，等有平仓样本后再单独校准。
 const MIN_ENTRY_PRICE = 1;
 
 // T+7 交易保护（2026-07-15 新规）：买入锁定 7 天，锁定期内出了卖出信号也只能干看着。
