@@ -25,7 +25,9 @@ export interface ISignalSummary {
   signals: ISignalSnapshot;
   rule: IRuleResult;
   crossPlatformSpread: ICrossPlatformSpread | null;
-  recentPrices: number[]; // 近 7 天内的快照价格，按时间升序，给走势图用
+  // 近 7 天的价格，按小时重采样后按时间升序，给走势图用，最多 169 点。
+  // 点数刻意跟同步频率解耦，别改回读原始 history——理由见下面计算处的注释。
+  recentPrices: number[];
   changeToday: IPriceChange | null; // 跟 24 小时前最近的一条快照比,数据不够时是 null
   manipulation: IManipulationScoreResult | null; // 操盘嫌疑分，历史数据不足 8 天时是 null
 }
@@ -60,8 +62,8 @@ export function computeSignalSummary(
   if (history.length === 0) return null;
 
   // MA/RSI/成交量异动/嫌疑分这些函数把数组下标当"小时"用，喂之前统一按小时重采样
-  // （见 resampleHourly 注释）；recentPrices（走势图）和 changeToday 走的是原始 history，
-  // 按时间戳查找不受采样频率影响，保留全分辨率数据点更利于图表展示。
+  // （见 resampleHourly 注释）；changeToday 走原始 history，它是按时间戳查一个点，
+  // 不受采样频率影响，用全分辨率更精确。
   const hourly = resampleHourly(history);
   const prices = hourly.map((h) => h.price);
   const volumes = hourly.map((h) => h.volume ?? 0);
@@ -83,8 +85,16 @@ export function computeSignalSummary(
     latestByPlatform.map((p) => ({ platform: p.platform, price: p.price }))
   );
 
+  // 走势图数据点数**必须跟写入频率解耦**，用 hourly 不用 history——这一条踩过坑：
+  // 原来这里读原始 history，写的时候（2026-07-26 重采样改造）原始数据就是每小时一条，
+  // 7 天 = 168 个点，没问题；但同期上线的 C5 高频 tick 把写入频率提到 10 分钟一次，
+  // 同一行代码就变成 7×144≈1000 个点，实测这一列在库里涨到 1.68MB、单品均值 831 点。
+  // 后果是每次渲染 /positions 和 /watchlist 都要读+JSON.parse 这 1.68MB，再把上千个
+  // 坐标塞进一个 80×28 像素的 SVG（那么小的图最多也就能显示 80 个点，多出来的纯浪费），
+  // 顺带还把上千个数字拼进了 LLM 提示词（见 lib/api/nvidia-llm.ts 的价格序列那段）。
+  // 用 hourly 之后固定 ≤169 点，以后再怎么调同步频率都不会重演。
   const sevenDaysAgoMs = new Date(latest.captured_at).getTime() - 7 * 24 * 60 * 60 * 1000;
-  const recentPrices = history
+  const recentPrices = hourly
     .filter((h) => new Date(h.captured_at).getTime() >= sevenDaysAgoMs)
     .map((h) => h.price);
 
