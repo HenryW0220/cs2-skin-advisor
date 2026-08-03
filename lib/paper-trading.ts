@@ -5,7 +5,7 @@ import {
   listOpenPaperTrades,
   openPaperTrade,
 } from "./db/paper-trades";
-import { recordShadowSellSignal } from "./db/shadow-sell-signals";
+import { getLastShadowSellSignal, recordShadowSellSignal } from "./db/shadow-sell-signals";
 import { getLatestPricesByPlatform } from "./db/snapshots";
 import { listWatchlist } from "./db/watchlist";
 import { netSellPrice } from "./fees";
@@ -39,20 +39,17 @@ const REENTRY_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 // 模拟卖出按 C5 普通用户费率扣手续费（1%，lib/fees.ts）。
 const SELL_FEE_KEY = "c5";
 
+// 影子卖出规则的版本号，同一张表里可以并存多版对比（见 db/migrations/020）
+const SHADOW_RULE_VERSION = "v2";
+// 动作没变的情况下，隔多久才补记一条。取 24 小时是为了让长期 HOLD 也有连续性可查，
+// 又不会把表撑成每小时一条的流水（119 笔过 T+7 的仓位不去重就是每天 2856 行）。
+const SHADOW_REDUNDANT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 export interface IPaperTradingSummary {
   opened: number;
   closed: number;
 }
 
-/**
- * 每小时价格同步后跑一遍模拟盘：观察池饰品买入信号达标就模拟开仓，
- * 已开仓位过了 T+7 锁定期后出 SELL 信号（或持有超时）就模拟平仓。
- *
- * 已知的简化（评估结果时要记得）：
- * - 买入按参考平台在售价成交（吃单价，现实里做得到）；卖出也按在售价扣 1% 手续费算，
- *   这偏乐观——真挂单可能要压价才卖得掉，低价品还有流动性折价（PLAN.md C3 提过）。
- * - 不模拟仓位大小，每笔都是"1 件"，收益率按单件算。
- */
 /**
  * 把影子规则 v2 的判断记一条，不影响本轮任何真实动作。
  * 失败不能影响模拟盘本身——这只是个观察记录，出问题宁可少一条数据也不能让平仓逻辑挂掉。
@@ -64,11 +61,24 @@ function recordShadowDecision(trade: IPaperTrade, summary: ISignalSummary): void
       return24h: (summary.changeToday?.percent ?? 0) / 100,
       hourlyPrices: summary.recentPrices,
     });
+
+    // 去重：模拟盘每小时一轮，同一个持续状态不去重的话一天记 24 条，
+    // "触发次数"就没意义了（持续 5 小时的卖出信号是一次信号不是五次）。
+    // 动作变了就记新的一条；动作没变则每天补记一条，这样长期 HOLD 也有连续性可查。
+    const last = getLastShadowSellSignal(trade.id, SHADOW_RULE_VERSION);
+    if (
+      last &&
+      last.action === verdict.action &&
+      Date.now() - new Date(last.decided_at).getTime() < SHADOW_REDUNDANT_WINDOW_MS
+    ) {
+      return;
+    }
+
     recordShadowSellSignal({
       trade_id: trade.id,
       item_name: trade.item_name,
       platform: trade.platform,
-      rule_version: "v2",
+      rule_version: SHADOW_RULE_VERSION,
       action: verdict.action,
       reason: verdict.reason,
       price: summary.signals.price,
@@ -81,6 +91,15 @@ function recordShadowDecision(trade: IPaperTrade, summary: ISignalSummary): void
   }
 }
 
+/**
+ * 每小时价格同步后跑一遍模拟盘：观察池饰品买入信号达标就模拟开仓，
+ * 已开仓位过了 T+7 锁定期后出 SELL 信号（或持有超时）就模拟平仓。
+ *
+ * 已知的简化（评估结果时要记得）：
+ * - 买入按参考平台在售价成交（吃单价，现实里做得到）；卖出也按在售价扣 1% 手续费算，
+ *   这偏乐观——真挂单可能要压价才卖得掉，低价品还有流动性折价（PLAN.md C3 提过）。
+ * - 不模拟仓位大小，每笔都是"1 件"，收益率按单件算。
+ */
 export function runPaperTradingTick(): IPaperTradingSummary {
   const now = Date.now();
   let opened = 0;

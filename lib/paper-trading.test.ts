@@ -102,6 +102,9 @@ vi.mock("./db/shadow-sell-signals", () => ({
     state.shadowSignals.push(signal);
     return true;
   },
+  // 真实实现靠这个去重（同一状态一天只记一条），mock 里按最后一条同 trade 的记录返回
+  getLastShadowSellSignal: (tradeId: number) =>
+    [...state.shadowSignals].reverse().find((s) => s.trade_id === tradeId),
 }));
 
 vi.mock("./db/snapshots", () => ({

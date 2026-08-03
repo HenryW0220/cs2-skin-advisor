@@ -36,6 +36,24 @@ export function recordShadowSellSignal(
   return result.changes > 0;
 }
 
+/**
+ * 某笔仓位最近一条影子记录。用来去重：模拟盘每小时跑一轮，同一个持续状态
+ * 不去重的话一天会记 24 条，"触发次数"这个指标就废了——一个持续 5 小时的卖出信号
+ * 是**一次**信号不是五次。
+ */
+export function getLastShadowSellSignal(
+  tradeId: number,
+  ruleVersion: string
+): IShadowSellSignal | undefined {
+  return getDb()
+    .prepare(
+      `SELECT * FROM shadow_sell_signals
+       WHERE trade_id = ? AND rule_version = ?
+       ORDER BY decided_at DESC LIMIT 1`
+    )
+    .get(tradeId, ruleVersion) as IShadowSellSignal | undefined;
+}
+
 export function listShadowSellSignals(action?: string): IShadowSellSignal[] {
   const db = getDb();
   return (
