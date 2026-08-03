@@ -2,6 +2,10 @@ import { InstallPrompt } from "@/components/features/install-prompt";
 import { PushNotificationManager } from "@/components/features/push-notification-manager";
 import { SyncItemCatalogButton } from "@/components/features/sync-item-catalog-button";
 
+// 这一页要在请求时读环境变量拿 VAPID 公钥；没有 searchParams 的页面会被生产构建
+// 静态预渲染（踩坑 11），那样读到的是构建机器上的值——CI 上构建就是空的。
+export const dynamic = "force-dynamic";
+
 export default function SettingsPage() {
   return (
     <div className="max-w-xl space-y-6">
@@ -12,7 +16,7 @@ export default function SettingsPage() {
           嫌疑分预警、同收藏品联动预警会在触发时推到已订阅的设备。手机上先“添加到主屏幕”装成
           App，通知才稳定。
         </p>
-        <PushNotificationManager />
+        <PushNotificationManager vapidPublicKey={process.env.VAPID_PUBLIC_KEY ?? ""} />
         <InstallPrompt />
       </section>
       <section className="space-y-3 rounded border border-neutral-800 p-4">

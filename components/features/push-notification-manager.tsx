@@ -11,7 +11,12 @@ function urlBase64ToUint8Array(base64String: string) {
   return outputArray;
 }
 
-export function PushNotificationManager() {
+/**
+ * @param vapidPublicKey VAPID 公钥，由 /settings 页在**请求时**从环境变量读出来传进来。
+ *   不在这里直接读 process.env.NEXT_PUBLIC_*：那种写法是构建期内联的，
+ *   而镜像在 GitHub Actions 上构建（那里没有密钥），会被冻结成空字符串。
+ */
+export function PushNotificationManager({ vapidPublicKey }: { vapidPublicKey: string }) {
   const [isSupported, setIsSupported] = useState(false);
   const [subscription, setSubscription] = useState<PushSubscription | null>(null);
   const [busy, setBusy] = useState(false);
@@ -32,10 +37,14 @@ export function PushNotificationManager() {
     setBusy(true);
     setMessage(null);
     try {
+      // 公钥空的时候 subscribe 会抛一句跟原因毫无关系的浏览器报错，先自己说清楚
+      if (!vapidPublicKey) {
+        throw new Error("服务端没有配置 VAPID_PUBLIC_KEY，无法订阅");
+      }
       const registration = await navigator.serviceWorker.ready;
       const sub = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!),
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
       });
       const res = await fetch("/api/push/subscribe", {
         method: "POST",

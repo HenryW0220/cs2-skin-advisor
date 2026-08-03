@@ -131,8 +131,11 @@ NVIDIA_MODEL=deepseek-ai/deepseek-v4-flash
 STEAM_API_KEY=
 STEAM_USER_ID=
 
-# Web Push（D3，`npx web-push generate-vapid-keys` 生成；公钥要 NEXT_PUBLIC_ 前缀才能进浏览器 bundle）
-NEXT_PUBLIC_VAPID_PUBLIC_KEY=
+# Web Push（D3，`npx web-push generate-vapid-keys` 生成）
+# 公钥不带 NEXT_PUBLIC_ 前缀是有意的：带前缀的变量会在 next build 时被内联成常量，
+# 而镜像是在 GitHub Actions 上构建的（那里没有 .env.local），会被冻结成空字符串。
+# 现在由 /settings 页在请求时读出来传给浏览器组件。
+VAPID_PUBLIC_KEY=
 VAPID_PRIVATE_KEY=
 VAPID_CONTACT_EMAIL=
 

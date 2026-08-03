@@ -1,7 +1,10 @@
 import webpush from "web-push";
 import { listPushSubscriptions, removePushSubscription } from "../db/push-subscriptions";
 
-const PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? "";
+// 不带 NEXT_PUBLIC_ 前缀是有意的：带前缀的变量会在 next build 时被内联成常量，
+// 而镜像现在是在 GitHub Actions 上构建的（那里没有 .env.local），
+// 内联进去的会是空字符串，推送会静默发不出去。不带前缀才是容器启动时才读。
+const PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY ?? "";
 const PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY ?? "";
 const CONTACT_EMAIL = process.env.VAPID_CONTACT_EMAIL ?? "";
 
@@ -33,7 +36,7 @@ interface IPushResult {
  */
 export async function sendPushNotification(payload: IPushNotificationPayload): Promise<IPushResult> {
   if (!ensureConfigured()) {
-    return { data: null, error: "VAPID 密钥未配置（NEXT_PUBLIC_VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY/VAPID_CONTACT_EMAIL）" };
+    return { data: null, error: "VAPID 密钥未配置（VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY/VAPID_CONTACT_EMAIL）" };
   }
 
   const subscriptions = listPushSubscriptions();
