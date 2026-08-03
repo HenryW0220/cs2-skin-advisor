@@ -35,6 +35,7 @@ npm run dev
 - **[CLAUDE.md](CLAUDE.md)**（+ 引用的 [AGENTS.md](AGENTS.md)）—— 项目规范：目录结构、编码规范、Git 规范、开发优先级。**任何时候写代码前先读这个**，两个文件名是 Claude Code 工具约定识别的保留名，不要改名。
 - **[HANDOFF.md](HANDOFF.md)** —— 交接文档：当前生产环境架构、部署流程、每次会话的变更摘要、踩过的坑（不要重复踩）。**给完全没有上下文的新会话看的现状文档**。
 - **[PLAN.md](PLAN.md)** —— 路线图：分阶段（A 数据/标注 → B 检测 → C 预测 → D 产品化 → E 多用户）的任务拆解、进度、决策依据。
+- **[HYPOTHESES.md](HYPOTHESES.md)** —— 特征假设库：**外部概念（股市技术分析、市场微观结构、行为金融、CS2 供给侧、项目所有者的经验剧本）进入这个项目的闸门**。每条按状态归档——已上线 / 已验证未上线 / 待验证 / 数据不足 / **已证伪** / 不适用。两条规矩：概念只能当假设来源不能当证据，进 `lib/signals`、`lib/rules` 必须过它第五节那七关（按标的算 AUC、剔退化样本、量纲归一、多重检验校正、效应量下限、阈值从回测反推、影子并行）；**已证伪的条目永远不删**，它们防的是几个月后有人（包括 AI）冒出同样的直觉再花一遍同样的时间。
 - **[REPORT-manipulation-playbook-stages.md](REPORT-manipulation-playbook-stages.md)** —— 操盘剧本六阶段的数据验证报告（低位横盘/吸货/会员进场/洗盘/主拉升/出货）。
 - **[REPORT-prediction-baseline.md](REPORT-prediction-baseline.md)** —— C1/C2 预测模型第一版基线报告，结论是不满足上线门槛，原因和下一步都写在里面。
 - **[REPORT-bidding-depth-features.md](REPORT-bidding-depth-features.md)** —— 求购深度（挂单簿需求侧）特征验证，第一个统计上站得住的非价格特征。
