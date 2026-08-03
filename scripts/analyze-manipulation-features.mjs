@@ -149,6 +149,12 @@ for (const [item, map] of returnsByItemHour) {
 }
 
 const samples = { manip: [], normal: [], external: [] };
+// 按饰品分开再留一份。**下面主表的池化 AUC 会虚高**：同一个饰品的一波行情贡献几百条
+// 高度自相关的小时样本，名义样本量远大于有效样本量。2026-08-03 在求购深度分析里踩到
+// 这一点（REPORT-bidding-depth-features.md）——那边六个特征按饰品拆开之后，
+// 能立住的两个跟池化排序**不一样**。主表保持原样是为了跟历次运行可比，
+// 按饰品检验作为附加一节追加在后面，判据以附加那节为准。
+const perItem = new Map();
 
 for (const item of taggedItems) {
   const platform = itemPlatform.get(item);
@@ -182,7 +188,8 @@ for (const item of taggedItems) {
     const from24 = Math.max(0, i - 24);
     const absReturn24h = prices[from24] > 0 ? Math.abs(prices[i] - prices[from24]) / prices[from24] : 0;
 
-    samples[labelFor(item, ts)].push({
+    const label = labelFor(item, ts);
+    const feat = {
       absReturn1h: Math.abs(returns[i]),
       absReturn24h,
       absZ: retStats.std > 0 ? Math.abs((returns[i] - retStats.mean) / retStats.std) : 0,
@@ -191,7 +198,10 @@ for (const item of taggedItems) {
       maDev: ma && ma.mean > 0 ? Math.abs(prices[i] - ma.mean) / ma.mean : 0,
       coMove,
       coMove24h,
-    });
+    };
+    samples[label].push(feat);
+    if (!perItem.has(item)) perItem.set(item, { manip: [], normal: [], external: [] });
+    perItem.get(item)[label].push(feat);
   }
 }
 
@@ -229,5 +239,53 @@ for (const f of FEATURES) {
   const a = auc(samples.manip.map((s) => s[f]), samples.normal.map((s) => s[f]));
   console.log(
     `${f.padEnd(14)} | ${m.toFixed(4).padStart(12)} | ${n.toFixed(4).padStart(12)} | ${e.toFixed(4).padStart(12)} | ${a.toFixed(3)}`
+  );
+}
+
+// ---------- 附加：按饰品检验（2026-08-03 加，判据以这一节为准）----------
+// 上面那张表的分母是"小时样本数"，但同一饰品的一波行情能贡献几百条自相关样本。
+// 特征真的有区分度的话，应该**多数饰品各自**都呈现同方向，而不是靠少数几个饰品的
+// 长窗口把池化统计量拉起来。符号检验：特征无效时每个饰品 AUC>0.5 是抛硬币。
+function signTestP(hits, total) {
+  if (!total) return NaN;
+  const logC = (n, k) => {
+    let s = 0;
+    for (let i = 0; i < k; i++) s += Math.log(n - i) - Math.log(i + 1);
+    return s;
+  };
+  let logSum = -Infinity;
+  for (let i = hits; i <= total; i++) {
+    const l = logC(total, i);
+    logSum = logSum === -Infinity ? l : Math.max(logSum, l) + Math.log(1 + Math.exp(-Math.abs(logSum - l)));
+  }
+  return Math.exp(logSum - total * Math.log(2));
+}
+
+console.log("");
+console.log("=== 按饰品检验（池化 AUC 会被自相关虚高，判据看这里）===");
+console.log("特征           | 可检验饰品数 | AUC>0.5 的 | 各饰品AUC中位数 | 符号检验 p | 退化剔除");
+console.log("---------------|------------|-----------|----------------|------------|--------");
+for (const f of FEATURES) {
+  const aucs = [];
+  let degenerate = 0;
+  for (const [, s] of perItem) {
+    if (s.manip.length < 24 || s.normal.length < 24) continue; // 至少各一天
+    const pos = s.manip.map((x) => x[f]);
+    const neg = s.normal.map((x) => x[f]);
+    // 取值全相同的饰品对这个特征没有信息量，AUC 会机械地等于 0.5——
+    // 算进去会把"命中数/总数"稀释到看起来像抛硬币，制造假阴性。
+    // coMove 就踩过这个：67 个有标记的饰品里只有 33 个有收藏品信息，
+    // 另外 34 个的 coMove 恒为 0，不剔除的话这个特征永远显得没信号。
+    if (new Set([...pos, ...neg]).size <= 1) {
+      degenerate++;
+      continue;
+    }
+    const a = auc(pos, neg);
+    if (!Number.isNaN(a)) aucs.push(a);
+  }
+  const above = aucs.filter((a) => a > 0.5).length;
+  console.log(
+    `${f.padEnd(14)} | ${String(aucs.length).padStart(6)} | ${String(above).padStart(9)} | ` +
+      `${median(aucs).toFixed(3).padStart(14)} | ${signTestP(above, aucs.length).toFixed(4).padStart(10)} | ${degenerate}`
   );
 }
