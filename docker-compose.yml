@@ -1,8 +1,12 @@
-# 服务器/NAS 部署用：docker compose up -d --build
-# .env.local（各平台 API key）不进镜像，用 env_file 注入。
+# 云端部署（2026-08-02 起改成"别处构建、这里只拉取"，HANDOFF 踩坑 40）：
+#   ./scripts/deploy-cloud.sh      # = git pull + docker compose pull + up -d
+# 故意不写 build: —— 这台 1 核机器上就地构建会让站点在整个构建期不可访问，
+# 少了这个键，误敲 `docker compose up -d --build` 也不会真的开始编译。
+# 镜像由 GitHub Actions 构建推送，见 .github/workflows/build-image.yml。
+# .env.local（各平台 API key、Basic Auth、VAPID 私钥）不进镜像，用 env_file 注入。
 services:
   app:
-    build: .
+    image: ghcr.io/henryw0220/cs2-skin-advisor:latest
     ports:
       - "3210:3000"
     env_file:

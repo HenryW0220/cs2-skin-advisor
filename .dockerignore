@@ -1,0 +1,36 @@
+# 构建上下文排除清单。镜像从 2026-08-02 起在 GitHub Actions 上构建并推到公开的
+# 镜像仓库（HANDOFF 踩坑 40），所以这个文件不只是"让构建快一点"——
+# 它是防止密钥和真实持仓数据被打进镜像的那道闸门，改之前先想清楚。
+#
+# 注意别排除 db/（迁移文件运行时才读）和 scripts/（一次性分析脚本靠 docker exec 在容器里跑）。
+
+# 绝对不能进镜像：API key、Basic Auth 密码、VAPID 私钥
+.env
+.env.*
+
+# 绝对不能进镜像：真实持仓/成本价/标注数据，以及每日备份
+data/
+
+# 构建产物和依赖，builder 阶段自己会重新装/重新编译，
+# 带进去只会让上下文变大，还可能把宿主机平台的 better-sqlite3 二进制混进来
+node_modules/
+.next/
+out/
+build/
+*.tsbuildinfo
+
+.git/
+.github/
+.claude/
+.vscode/
+
+# 文档和报告：运行时用不到
+*.md
+
+# 本机开发/运维用的脚本，Linux 容器里跑不了
+scripts/*.ps1
+scripts/*.cmd
+
+# 单元测试不参与生产构建
+**/*.test.ts
+**/*.test.tsx

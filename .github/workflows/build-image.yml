@@ -1,0 +1,99 @@
+# 把镜像构建从生产机器上搬走（HANDOFF 踩坑 40）。
+# 云端是 1 核 1GB 的 Oracle Always Free VM，就地 `up -d --build` 期间 CPU 被吃满，
+# 站点整个构建期白屏，实测连 ssh 跑一条 docker ps 都 120 秒不返回。
+# 现在：push 到 main → 这里构建 → 冒烟测试通过才推 GHCR → 云端只 pull + 重启。
+name: 构建部署镜像
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 连着推几个 commit 时只留最后一次构建，别让云端拉到中间态的 latest
+concurrency:
+  group: build-image
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # GHCR 的镜像名必须全小写，而仓库名带大写（HenryW0220/...），直接拼会被拒
+      - name: 计算镜像名
+        id: meta
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 先只构建到本地，冒烟测试过了才推——推坏的 latest 出去，
+      # 云端下次 pull 就会拿到起不来的镜像
+      - name: 构建镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: cs2-skin-advisor:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # .dockerignore 是防止密钥/真实持仓进镜像的唯一一道闸门，而它坏掉是完全静默的
+      # （踩坑 21 同一个模式）。镜像要推到公开仓库，这里当作硬门槛卡住。
+      - name: 检查镜像里没有密钥和真实数据
+        run: |
+          leaked=$(docker run --rm --entrypoint sh cs2-skin-advisor:ci -c \
+            'ls -A /app/.env* /app/data/db.sqlite 2>/dev/null || true')
+          if [ -n "$leaked" ]; then
+            echo "::error::镜像里混进了不该有的文件：$leaked（检查 .dockerignore）"
+            exit 1
+          fi
+          echo "镜像内容干净"
+
+      # standalone 输出是靠静态分析裁出来的，"少带了运行时才读的文件"只在真跑起来时才暴露：
+      # 原生模块 .node、db/migrations/*.sql 都属于这类。这一步就是替云端先踩一遍。
+      - name: 冒烟测试（起容器 + 打一个要读数据库的页面）
+        run: |
+          docker run -d --name smoke -p 3000:3000 \
+            -e PRICE_SYNC_DISABLED=1 -e C5_FAST_SYNC_DISABLED=1 \
+            cs2-skin-advisor:ci
+          for i in $(seq 1 40); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/positions || true)
+            if [ "$code" = "200" ]; then
+              echo "第 ${i} 次探测拿到 200，容器起来了"
+              # 空库能渲染出持仓页 = 原生 better-sqlite3 加载成功 + 迁移跑完了
+              docker logs smoke
+              docker rm -f smoke
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::容器 120 秒内没有正常响应（最后一次状态码 ${code}）"
+          docker logs smoke
+          exit 1
+
+      - name: 推送到 GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:latest
+            ${{ steps.meta.outputs.image }}:${{ github.sha }}
+          # 云端 deploy 脚本靠这个标签核对"拉到的镜像是不是当前这次提交"，
+          # 免得推完代码马上部署、结果 CI 还没构建完却以为已经上线了
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+
+      - name: 记录镜像大小
+        run: docker images cs2-skin-advisor:ci --format '镜像大小：{{.Size}}'
