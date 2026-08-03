@@ -75,33 +75,84 @@ function priceNear(itemName, platform, atMs) {
   return row ? row.price : null;
 }
 
-// 大盘基准：某天开仓、持有 N 天，全市场的中位数收益。按天缓存——按小时算内存扛不住
-// （1 核 1GB 的机器，同 build-sell-rule-baseline.mjs 的取舍）。
+// ---------- 大盘基准 ----------
+// 某天开仓、持有 N 天，全市场的中位数收益。
+//
+// **2026-08-03 改成按 [起始, 结束] 窗口记忆化**。原来是每个 (开仓日, 持有天数) 组合
+// 打一条大 SQL（外层扫开仓日窗口 + 每个饰品一条相关子查询取未来价），实测**单次 26.7 秒**
+// （scripts/stress-market-baseline.mjs）。慢的是外层那一半：它只按 captured_at 过滤，
+// 而库里没有以 captured_at 打头的索引（现有两条都是 item_name 打头），只能整索引扫 191 万条。
+//
+// 关键观察：**外层那个窗口只跟"开仓日"有关，跟"持有天数"无关**。原来的写法把两者
+// 绑在一条 SQL 里，于是同一个开仓日配 24 种持有天数就要重复扫 24 遍完全相同的窗口。
+// 拆开之后，取价这件事按窗口缓存，同一个 [起始, 结束] 只算一次：
+//   · 开仓日窗口：实测 231 笔仓位只分布在 11 个开仓日上 → 最多 11 次扫描；
+//   · 未来价：改成逐饰品的点查（item_name+platform+captured_at 全走得上索引，本来就快），
+//     不再走"每次都重扫一遍全表"的路径。
+// 不动 schema、不加索引——加索引另议（要锁库几十秒，得挑同步间隙）。
+//
+// **实测效果**（`scripts/stress-market-baseline.mjs`，191 万行、1 核 1GB）：
+//   真实形状（11 个真实开仓日 × 持有 7~30 天 = 264 个组合）：264 次调用只触发 **11 次窗口
+//   扫描**，**1.25s/次、总 331s**，对比改造前同规模估算的约 117 分钟——**约 21 倍**。
+//   但**最坏情况（每个开仓日都不同）几乎没有改善**（27.79s/次 vs 改造前 26.7s/次）：
+//   记忆化只能省掉重复的窗口，窗口不重复时一次都省不掉。**要连最坏场景也治好，
+//   只有加 captured_at 打头的索引那条路**——现有两条索引都是 item_name 打头。
+const windowCache = new Map();
+/**
+ * 某个时间窗口内每个 (饰品, 平台) 的价格，按 [startIso, endIso) 缓存。
+ * 取窗口内**最早**的一条——跟未来价那边 `ORDER BY captured_at ASC LIMIT 1` 同口径。
+ *
+ * ⚠️ 这里跟改动前有一处**语义变化，是修正不是回归**：原来外层写的是
+ * `SELECT a.price ... GROUP BY a.item_name, a.platform`，`a.price` 是 GROUP BY 之外的
+ * 裸列，SQLite 会从组内**任意**一行取值（实践中通常是扫到的最后一行），也就是说
+ * "开仓当天的价"取的是当天最后一条、而"未来价"取的是窗口最早一条，两头口径不一致。
+ * 现在统一成"窗口内最早一条"。**当前 0 笔平仓，没有任何已产出的数字会因此改变。**
+ */
+function pricesInWindow(startIso, endIso) {
+  const key = `${startIso}|${endIso}`;
+  const hit = windowCache.get(key);
+  if (hit) return hit;
+  const rows = db
+    .prepare(
+      `SELECT item_name, platform, price, MIN(captured_at) AS first_at
+       FROM price_snapshots
+       WHERE captured_at >= ? AND captured_at < ? AND price > 0
+       GROUP BY item_name, platform`
+    )
+    .all(startIso, endIso);
+  windowCache.set(key, rows);
+  return rows;
+}
+
+// 未来价走**逐饰品点查**而不是再扫一个窗口。这两条路差别很大：
+// 按 captured_at 扫窗口用不上任何索引（要整表扫 191 万条），而带上 item_name+platform
+// 之后 (item_name, platform, captured_at) 那条 UNIQUE 索引就完全能用上，是一次范围定位。
+// 原来的大 SQL 里相关子查询这一半本来就是快的（查询计划显示 SEARCH b USING INDEX），
+// 慢的从来只是外层那个按天扫的部分——所以只把外层缓存掉，内层保持原样。
+const futurePriceStmt = db.prepare(
+  `SELECT price FROM price_snapshots
+   WHERE item_name = ? AND platform = ? AND price > 0
+     AND captured_at >= ? AND captured_at < ?
+   ORDER BY captured_at ASC LIMIT 1`
+);
+
 const marketCache = new Map();
 function marketReturn(fromMs, horizonDays) {
   const day = Math.floor(fromMs / DAY_MS) * DAY_MS;
   const key = `${day}|${horizonDays}`;
   if (marketCache.has(key)) return marketCache.get(key);
 
-  const rows = db
-    .prepare(
-      `SELECT a.item_name, a.platform, a.price p0, (
-         SELECT b.price FROM price_snapshots b
-         WHERE b.item_name = a.item_name AND b.platform = a.platform AND b.price > 0
-           AND b.captured_at >= ? AND b.captured_at < ?
-         ORDER BY b.captured_at ASC LIMIT 1
-       ) p1
-       FROM price_snapshots a
-       WHERE a.captured_at >= ? AND a.captured_at < ? AND a.price > 0
-       GROUP BY a.item_name, a.platform`
-    )
-    .all(
-      new Date(day + horizonDays * DAY_MS).toISOString(),
-      new Date(day + horizonDays * DAY_MS + PRICE_TOLERANCE_MS).toISOString(),
-      new Date(day).toISOString(),
-      new Date(day + DAY_MS).toISOString()
-    );
-  const rets = rows.filter((r) => r.p1 > 0 && r.p0 > 0).map((r) => (r.p1 - r.p0) / r.p0);
+  // 开仓日窗口：贵，但只跟"开仓日"有关，按窗口缓存后每个开仓日只扫一次
+  const base = pricesInWindow(new Date(day).toISOString(), new Date(day + DAY_MS).toISOString());
+  const futureStart = day + horizonDays * DAY_MS;
+  const fromIso = new Date(futureStart).toISOString();
+  const toIso = new Date(futureStart + PRICE_TOLERANCE_MS).toISOString();
+
+  const rets = [];
+  for (const r of base) {
+    const future = futurePriceStmt.get(r.item_name, r.platform, fromIso, toIso);
+    if (future && future.price > 0 && r.price > 0) rets.push((future.price - r.price) / r.price);
+  }
   const value = rets.length >= MIN_MARKET_SAMPLES ? median(rets) : null;
   marketCache.set(key, value);
   return value;
