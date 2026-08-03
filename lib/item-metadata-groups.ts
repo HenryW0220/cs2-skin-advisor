@@ -21,6 +21,19 @@ export type ICollectionSource = "official" | "derived";
 const CAPSULE_PREFIX = "capsule:";
 const AGENT_PREFIX = "agentgroup:";
 
+// 探员的名字格式是 `角色名 | 所属组织`，没有品类前缀。但音乐盒（`Music Kit | 艺人, 曲名`）、
+// 挂件（`Charm | 名字`）、布章（`Patch | 名字`）、涂鸦这些同样是两段式，会被误判成探员——
+// 实测回填演练时就把 `StatTrak™ Music Kit | Repiet & Julia Kleijn, On And On` 分成了
+// "组织"。它们各自只有一件、不会真的产生联动预警，但语义是错的，明确排除掉。
+const NON_AGENT_TYPE_PREFIXES = [
+  "Music Kit |",
+  "Charm |",
+  "Patch |",
+  "Graffiti |",
+  "Sealed Graffiti |",
+  "Sticker |",
+];
+
 /**
  * 推导联动分组。皮肤一律返回 null（它们用真实收藏品，不该被这里覆盖）。
  *
@@ -38,7 +51,10 @@ export function deriveLinkageGroup(itemName: string): string | null {
   }
 
   // 探员是 `角色名 | 所属组织`，两段且不以磨损括号结尾——
-  // 皮肤都带磨损后缀（`AK-47 | Redline (Field-Tested)`），用这个区分开
+  // 皮肤都带磨损后缀（`AK-47 | Redline (Field-Tested)`），用这个区分开。
+  // StatTrak™ 前缀要先剥掉再判品类，否则 `StatTrak™ Music Kit | ...` 会漏过排除名单。
+  const withoutQuality = itemName.replace(/^StatTrak™\s+/, "").replace(/^Souvenir\s+/, "");
+  if (NON_AGENT_TYPE_PREFIXES.some((p) => withoutQuality.startsWith(p))) return null;
   if (parts.length === 2 && !itemName.endsWith(")")) {
     return AGENT_PREFIX + parts[1];
   }

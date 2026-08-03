@@ -20,11 +20,23 @@ const apply = process.argv.includes("--apply");
 const revert = process.argv.includes("--revert");
 const db = new Database("data/db.sqlite");
 
+const NON_AGENT_TYPE_PREFIXES = [
+  "Music Kit |",
+  "Charm |",
+  "Patch |",
+  "Graffiti |",
+  "Sealed Graffiti |",
+  "Sticker |",
+];
+
 function deriveLinkageGroup(itemName) {
   const parts = itemName.split("|").map((s) => s.trim());
   if (itemName.startsWith("Sticker |")) {
     return parts.length >= 3 ? "capsule:" + parts[parts.length - 1] : null;
   }
+  // 音乐盒/挂件/布章也是两段式且不带磨损后缀，不排除会被误判成探员组织
+  const withoutQuality = itemName.replace(/^StatTrak™\s+/, "").replace(/^Souvenir\s+/, "");
+  if (NON_AGENT_TYPE_PREFIXES.some((p) => withoutQuality.startsWith(p))) return null;
   if (parts.length === 2 && !itemName.endsWith(")")) {
     return "agentgroup:" + parts[1];
   }

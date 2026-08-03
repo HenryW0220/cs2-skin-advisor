@@ -27,6 +27,23 @@ warm_up() {
     auth=(-u "${BASIC_AUTH_USER}:${BASIC_AUTH_PASSWORD:-}")
   fi
 
+  # 先等服务真的开始监听。`docker compose up -d` 一返回容器就算"起来了"，但 Node 还要
+  # 几秒才 listen——不等的话前几个预热请求会立刻拿到连接拒绝（curl 写 000、耗时 0.000s），
+  # 看起来像超时，实际一行数据库都没读到，等于没预热。第一版就是这么错的。
+  echo "[deploy] 等待服务开始响应"
+  local ready=""
+  for _ in $(seq 1 30); do
+    if curl -s -o /dev/null -m 5 "${auth[@]}" "http://localhost:3210/ledger"; then
+      ready=yes
+      break
+    fi
+    sleep 2
+  done
+  if [ -z "$ready" ]; then
+    echo "[deploy] ⚠️  60 秒内没等到服务响应，跳过预热（容器状态见下方，自己确认一下）"
+    return 0
+  fi
+
   echo "[deploy] 预热页面（重启后系统页缓存是冷的）"
   for path in /positions /watchlist /paper /anomalies /ledger; do
     code=$(curl -s -o /dev/null -m 300 -w '%{http_code}|%{time_starttransfer}s' \

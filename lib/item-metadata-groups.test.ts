@@ -28,6 +28,14 @@ describe("deriveLinkageGroup", () => {
     expect(deriveLinkageGroup("Sticker | Katowice 2014")).toBeNull(); // 只有两段，没有赛事段
     expect(deriveLinkageGroup("Chroma Case")).toBeNull();
   });
+
+  // 音乐盒/挂件/布章也是"两段式且不带磨损后缀"，回填演练时真的被误判成过探员组织
+  it("音乐盒、挂件、布章不算探员", () => {
+    expect(deriveLinkageGroup("Music Kit | Austin Wintory, Desert Fire")).toBeNull();
+    expect(deriveLinkageGroup("StatTrak™ Music Kit | Neck Deep, Life's Not Out To Get You")).toBeNull();
+    expect(deriveLinkageGroup("Charm | Dr. Brian")).toBeNull();
+    expect(deriveLinkageGroup("Patch | Team Vitality | Paris 2023")).toBeNull();
+  });
 });
 
 describe("isDerivedGroup", () => {
