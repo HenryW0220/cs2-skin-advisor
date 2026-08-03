@@ -7,7 +7,6 @@ import { detectPriceZScoreAnomaly, scanPriceZScoreAnomalies } from "./signals/an
 import { computeManipulationScore } from "./signals/manipulation-score";
 import { computeMomentumChaseSignal } from "./signals/momentum-chase";
 import { resampleHourly } from "./signals/resample";
-import { detectVolumeAnomaly } from "./signals/volume";
 import { computeWashoutSignal } from "./signals/washout";
 import { pickReferencePlatform } from "./signal-summary";
 import { getTrackedItemNames } from "./tracked-items";
@@ -17,16 +16,16 @@ export interface IAnomalyScanSummary {
   eventsCreated: number;
 }
 
-// 每次价格同步后跑一遍：统计异常检测（价格 z-score + 成交量倍数）+ 操盘嫌疑分预警 +
-// 同收藏品联动预警，命中就落 pending 的 anomaly_events，等用户去 /anomalies 审核。
+// 每次价格同步后跑一遍：价格 z-score 统计异常 + 操盘嫌疑分预警 + 同收藏品联动预警，
+// 命中就落 pending 的 anomaly_events，等用户去 /anomalies 审核。
 // 扫描范围见 lib/tracked-items.ts：持仓只算 buy_price>0 的部分（开箱所得的审不过来），
 // 加观察池（观察池就是数据面扩容入口，见 PLAN.md A3）。
 //
-// 成交量用的窗口（168 期）比 lib/rules/evaluate.ts 里规则引擎用的默认窗口（7 期）
-// 长得多——规则引擎要的是"这一刻要不要决策"的短期信号，这里要的是"相对这个饰品
-// 自己的正常水平"的统计基线，窗口太短基线本身就不稳定，异常判断没有意义。
-const VOLUME_ANOMALY_WINDOW = 168;
-const VOLUME_ANOMALY_THRESHOLD = 3;
+// 这里**刻意没有成交量异动检测**。原来有一条（168 期基线、3 倍阈值），2026-08-03 查明
+// 它跟规则引擎那条是同一个根因：喂进去的是在售挂单数量（存量）不是成交量（流量），
+// 存量在小时尺度上不会翻倍。证据是 anomaly_events 表里 metric='volume_ratio' 的
+// 历史记录**一条都没有**，而同期 price_zscore 有 2043 条。理由详见 lib/db/snapshots.ts
+// 里 volume 那一列的注释。
 
 // 低价饰品的价格本身就是一分两分地跳（0.02 -> 0.03 就是 50%），这种"异常"是价格精度
 // 太粗糙的机械结果，不是操盘——没人会去操盘一个几块钱的东西。挡在检测之前，而不是
@@ -70,10 +69,6 @@ export async function scanForAnomalies(): Promise<IAnomalyScanSummary> {
     // 下面这批信号函数把数组下标当"小时"用，喂之前统一按小时重采样，见 resampleHourly 注释。
     const hourly = resampleHourly(history);
     const prices = hourly.map((h) => h.price);
-    // K 线回填的快照没有成交量（volume 是 null），如果把 null 当 0 计入基线，
-    // 均值会被大量 0 拉到接近 0，真实同步一来任何非零成交量都会被算成几十倍的"异常"——
-    // 只用真的有成交量数据的快照参与统计，且只在最新一条快照本身有真实成交量时才检测。
-    const volumeHistory = hourly.filter((h) => h.volume !== null);
 
     const priceResult = detectPriceZScoreAnomaly(prices);
     if (priceResult?.isAnomaly && Number.isFinite(priceResult.zScore)) {
@@ -89,25 +84,6 @@ export async function scanForAnomalies(): Promise<IAnomalyScanSummary> {
         eventsCreated += 1;
         triggered.set(itemName, { label: `z-score ${priceResult.zScore.toFixed(1)}`, value: priceResult.zScore });
       }
-    }
-
-    const latestHasVolume = volumeHistory[volumeHistory.length - 1]?.captured_at === latest.captured_at;
-    const volumeResult = latestHasVolume
-      ? detectVolumeAnomaly(
-          volumeHistory.map((h) => h.volume as number),
-          { window: VOLUME_ANOMALY_WINDOW, threshold: VOLUME_ANOMALY_THRESHOLD }
-        )
-      : null;
-    if (volumeResult?.isAnomaly && Number.isFinite(volumeResult.ratio)) {
-      const created = addAnomalyEvent({
-        item_name: itemName,
-        platform,
-        metric: "volume_ratio",
-        detected_at: latest.captured_at,
-        value: volumeResult.ratio,
-        price: latest.price,
-      });
-      if (created) eventsCreated += 1;
     }
 
     // 操盘嫌疑分预警（B4）：波动形态跟已确认操盘期高度相似时主动提醒

@@ -285,14 +285,6 @@ export default async function ItemDetailPage({
                     : "中性"
             }
           />
-          <SignalCard
-            label="成交量异常"
-            value={
-              summary.signals.volumeAnomalyRatio !== null
-                ? `${summary.signals.volumeAnomalyRatio.toFixed(1)}x`
-                : "无异常"
-            }
-          />
         </div>
       )}
 

@@ -13,7 +13,6 @@ import type { IAnomalyEvent, IAnomalyMetric, IItemMetadata } from "@/lib/types";
 
 const METRIC_LABEL: Record<IAnomalyMetric, string> = {
   price_zscore: "价格波动异常",
-  volume_ratio: "成交量放大",
   manipulation_score: "操盘嫌疑",
   collection_linkage: "联动预警",
   group_linkage: "同组联动",
@@ -27,7 +26,6 @@ const METRIC_LABEL: Record<IAnomalyMetric, string> = {
 // 追涨提示可能要跌），颜色上也该区分开，不用蓝色避免混淆。
 const METRIC_STYLE: Record<IAnomalyMetric, string> = {
   price_zscore: "bg-orange-500/15 text-orange-400",
-  volume_ratio: "bg-orange-500/15 text-orange-400",
   manipulation_score: "bg-red-500/15 text-red-400",
   collection_linkage: "bg-purple-500/15 text-purple-300",
   // 同组联动跟收藏品联动同属"别人动了、这个可能跟着动"，用同色系但更淡一档区分开：
@@ -41,8 +39,6 @@ function formatMetricValue(metric: IAnomalyMetric, value: number): string {
   switch (metric) {
     case "price_zscore":
       return `z-score ${value.toFixed(2)}`;
-    case "volume_ratio":
-      return `${value.toFixed(1)}x 于历史均值`;
     case "manipulation_score":
       return `嫌疑分 ${value.toFixed(0)}`;
     case "collection_linkage":
@@ -93,7 +89,7 @@ function findCollectionClusters(
     .sort((a, b) => b.items.length - a.items.length);
 }
 
-// 每小时同步后自动跑的统计异常检测（价格 z-score + 成交量倍数）落在这里等审核。
+// 每小时同步后自动跑的统计异常检测（价格 z-score）落在这里等审核。
 // 只扫持仓，跟 K 线回填、操盘标记的范围一致。确认/忽略的结果分别喂给
 // manipulation_tags 当正/负样本——这个页面是"自动检测"和"人工标注"的连接点。
 const PAGE_LIMIT = 50;

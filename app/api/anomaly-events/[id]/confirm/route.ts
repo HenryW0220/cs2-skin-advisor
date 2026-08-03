@@ -10,7 +10,6 @@ import type { IManipulationConfidence } from "@/lib/types";
 const VALID_CONFIDENCE: IManipulationConfidence[] = ["high", "medium", "low"];
 const METRIC_LABEL: Record<string, string> = {
   price_zscore: "价格异常波动",
-  volume_ratio: "成交量异常放大",
   manipulation_score: "操盘嫌疑分",
   collection_linkage: "同收藏品联动",
   washout_signal: "疑似洗盘",

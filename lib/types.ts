@@ -22,6 +22,13 @@ export interface IPriceSnapshot {
   // 直连 C5 价格接口时固定写 'c5'，所以这里用 string 而不是字面量联合类型。
   platform: string;
   price: number;
+  // ⚠️ **这一列是在售挂单数量（存量），不是成交量（流量）**——SteamDT 的 `sellCount` /
+  // C5 K 线的 `entry.count`。列名叫 volume 是历史遗留（改名要动迁移，破坏性大于收益）。
+  // **不要拿它当任何按流量设计的判据**：存量在小时尺度上几乎不动，实测 325 个饰品的
+  // "最新一小时量 / 前 7 小时均值"中位 1.0154、最大 1.2200，任何"放大 N 倍"型阈值
+  // 都是永不触发的死代码——规则引擎和异常扫描里各埋过一条，2026-08-03 已双双删除
+  // （HANDOFF 踩坑 43）。特征分析侧的同一个量（volumeRatio）按饰品检验 29/67、p=0.889，
+  // 独立地得出同一结论。真正的成交笔数 SteamDT/C5 都不返回，K 线也不带。
   volume: number | null;
   // 求购价/求购数（挂单深度的需求侧）。SteamDT 一直有返回，C5 直连价格接口没有，
   // 所以 platform='C5' 的行这两列固定是 null。
@@ -31,14 +38,16 @@ export interface IPriceSnapshot {
   created_at: string;
 }
 
-// price_zscore/volume_ratio 是统计异常；manipulation_score 是操盘嫌疑分预警（≥60 触发）；
+// price_zscore 是统计异常；manipulation_score 是操盘嫌疑分预警（≥60 触发）；
 // collection_linkage 是"同收藏品上级异动，下级炼金料可能跟涨"的联动预警；washout_signal 是
 // REPORT-manipulation-playbook-stages.md 验证过的洗盘/砸盘指纹（近48h深回撤+高波动），提示性质，不是确定性判断。
 // momentum_chase 是 REPORT-t7-actionable-labels.md 验证过的追涨风险（近24h涨幅过大，未来7天大概率回落），
 // 同样是提示性质，不是确定性判断——大涨也可能是主拉升的开始。
+// volume_ratio 曾经在这里，2026-08-03 删除：它靠在售量（存量）判"成交量放大 N 倍"，
+// 结构上永不触发，历史上一条事件都没产生过（删除时核对：price_zscore 2043 条、
+// manipulation_score 83 条、volume_ratio **0 条**），所以没有遗留数据需要兼容。
 export type IAnomalyMetric =
   | "price_zscore"
-  | "volume_ratio"
   | "manipulation_score"
   | "collection_linkage"
   | "washout_signal"

@@ -11,7 +11,6 @@ import {
 import { movingAverage } from "./signals/moving-average";
 import { resampleHourly } from "./signals/resample";
 import { rsi } from "./signals/rsi";
-import { detectVolumeAnomaly } from "./signals/volume";
 import type { IPriceSnapshot } from "./types";
 
 export interface IPriceChange {
@@ -61,12 +60,11 @@ export function computeSignalSummary(
   const history = getRecentPriceHistory(itemName, platform);
   if (history.length === 0) return null;
 
-  // MA/RSI/成交量异动/嫌疑分这些函数把数组下标当"小时"用，喂之前统一按小时重采样
+  // MA/RSI/嫌疑分这些函数把数组下标当"小时"用，喂之前统一按小时重采样
   // （见 resampleHourly 注释）；changeToday 走原始 history，它是按时间戳查一个点，
   // 不受采样频率影响，用全分辨率更精确。
   const hourly = resampleHourly(history);
   const prices = hourly.map((h) => h.price);
-  const volumes = hourly.map((h) => h.volume ?? 0);
   const latestIndex = prices.length - 1;
   const latest = hourly[latestIndex];
 
@@ -75,7 +73,6 @@ export function computeSignalSummary(
     ma7: movingAverage(prices, 7)[latestIndex] ?? null,
     ma30: movingAverage(prices, 30)[latestIndex] ?? null,
     rsi14: rsi(prices, 14)[latestIndex] ?? null,
-    volumeAnomalyRatio: detectVolumeAnomaly(volumes)?.ratio ?? null,
   };
 
   const rule = evaluateSignals(signals, { holding });

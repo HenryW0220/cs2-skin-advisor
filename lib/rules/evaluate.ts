@@ -1,9 +1,13 @@
+// 这里**刻意没有成交量项**。2026-08-03 查明：可用的"量"只有 price_snapshots.volume，
+// 那是在售挂单数量（存量）不是成交量（流量），小时尺度上根本不会翻倍——实测 325 个饰品
+// 的"最新一小时量 / 前 7 小时均值"中位 1.0154、最大 1.2200、达到 2 倍阈值的 0 个，
+// 特征分析侧同一个量（volumeRatio）按饰品检验也是 29/67、p=0.889 明确无信号。
+// 要重新加回来，先有真实成交笔数数据源，且先拿回测说话（见 lib/rules/sell-rule-v2.ts 的口径）。
 export interface ISignalSnapshot {
   price: number;
   ma7: number | null;
   ma30: number | null;
   rsi14: number | null;
-  volumeAnomalyRatio: number | null; // 来自 detectVolumeAnomaly 的 ratio，没算过就传 null
 }
 
 export type ITradeAction = "SELL" | "TRIM" | "HOLD" | "WATCH";
@@ -17,7 +21,6 @@ export interface IRuleResult {
 // 规则的权重和阈值都是经验值，不是统计回测出来的，上线观察后如果不准要回来调这里。
 const RSI_OVERBOUGHT = 70;
 const RSI_OVERSOLD = 30;
-const VOLUME_ANOMALY_THRESHOLD = 2;
 
 const SCORE_SELL_THRESHOLD = -40;
 const SCORE_TRIM_THRESHOLD = -15;
@@ -51,16 +54,6 @@ export function evaluateSignals(
     }
   }
 
-  if (signals.volumeAnomalyRatio !== null && signals.volumeAnomalyRatio >= VOLUME_ANOMALY_THRESHOLD) {
-    if (score < 0) {
-      score -= 15;
-      reasons.push(`成交量放大 ${signals.volumeAnomalyRatio.toFixed(1)} 倍，下跌信号增强`);
-    } else if (score > 0) {
-      score += 10;
-      reasons.push(`成交量放大 ${signals.volumeAnomalyRatio.toFixed(1)} 倍，上涨信号增强`);
-    }
-  }
-
   score = Math.max(-100, Math.min(100, score));
 
   return { action: pickAction(score, context.holding), score, reasons };
@@ -76,7 +69,6 @@ function pickAction(score: number, holding: boolean): ITradeAction {
 export const RULE_THRESHOLDS = {
   RSI_OVERBOUGHT,
   RSI_OVERSOLD,
-  VOLUME_ANOMALY_THRESHOLD,
   SCORE_SELL_THRESHOLD,
   SCORE_TRIM_THRESHOLD,
 };
