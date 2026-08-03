@@ -37,6 +37,7 @@ npm run dev
 - **[PLAN.md](PLAN.md)** —— 路线图：分阶段（A 数据/标注 → B 检测 → C 预测 → D 产品化 → E 多用户）的任务拆解、进度、决策依据。
 - **[REPORT-manipulation-playbook-stages.md](REPORT-manipulation-playbook-stages.md)** —— 操盘剧本六阶段的数据验证报告（低位横盘/吸货/会员进场/洗盘/主拉升/出货）。
 - **[REPORT-prediction-baseline.md](REPORT-prediction-baseline.md)** —— C1/C2 预测模型第一版基线报告，结论是不满足上线门槛，原因和下一步都写在里面。
+- **[REPORT-bidding-depth-features.md](REPORT-bidding-depth-features.md)** —— 求购深度（挂单簿需求侧）特征验证，第一个统计上站得住的非价格特征。
 - **[REPORT-t7-actionable-labels.md](REPORT-t7-actionable-labels.md)** —— T+7（交易保护新规下 7 天强制锁仓）约束下的可行动买卖标签验证。
 
 生产环境是部署在 Oracle Cloud 的 Docker 容器，具体部署/更新流程见 HANDOFF.md「运行架构」一节，不要在这份 README 里重复维护，避免两处不同步。

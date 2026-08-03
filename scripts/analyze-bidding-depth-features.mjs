@@ -107,6 +107,9 @@ const FEATURES = [
 
 const samples = { manip: [], normal: [], external: [] };
 const itemsWithData = [];
+// 按饰品分开留一份：池化 AUC 会被自相关的小时序列虚高（同一波行情贡献几百条样本，
+// 有效样本量远小于名义样本量），必须看"有多少个**饰品**各自也呈现同一方向"
+const perItem = new Map();
 
 const taggedItems = db.prepare("SELECT DISTINCT item_name FROM manipulation_tags").all().map((r) => r.item_name);
 
@@ -129,7 +132,8 @@ for (const item of taggedItems) {
     const bidAskMean = rollingMean(bidAsk, 168, i);
     const prev24 = bidCounts[i - 24];
 
-    samples[labelFor(item, ts)].push({
+    const label = labelFor(item, ts);
+    const feat = {
       bidCount: bidCounts[i],
       bidRatio: bidMean && bidMean > 0 ? bidCounts[i] / bidMean : 1,
       bidAskRatio: bidAsk[i],
@@ -137,7 +141,10 @@ for (const item of taggedItems) {
       bidSpread:
         row.price > 0 && row.bidding_price != null ? (row.price - row.bidding_price) / row.price : 0,
       bidCountChg24h: prev24 > 0 ? (bidCounts[i] - prev24) / prev24 : 0,
-    });
+    };
+    samples[label].push(feat);
+    if (!perItem.has(item)) perItem.set(item, { manip: [], normal: [], external: [] });
+    perItem.get(item)[label].push(feat);
   }
 }
 
@@ -183,6 +190,45 @@ for (const [f, desc] of FEATURES) {
   const a = auc(samples.manip.map((s) => s[f]), samples.normal.map((s) => s[f]));
   console.log(
     `${f.padEnd(18)} | ${m.toFixed(4).padStart(12)} | ${n.toFixed(4).padStart(12)} | ${e.toFixed(4).padStart(12)} | ${a.toFixed(3)}   ${desc}`
+  );
+}
+
+// ---------- 稳健性：按饰品拆开 ----------
+// 池化 AUC 的分母是"小时样本数"，但同一个饰品的一波行情能贡献几百条高度相关的样本，
+// 名义 916 条的有效样本量可能只有个位数。真正该问的是：**有多少个饰品各自也呈现同一方向**。
+// 这是符号检验（sign test）的口径：若特征无效，每个饰品的 AUC>0.5 应该是抛硬币。
+console.log("");
+console.log("=== 稳健性检验：按饰品各自算 AUC（池化 AUC 会被自相关虚高）===");
+// 符号检验的单尾 p 值：特征无效时每个饰品 AUC>0.5 应该是抛硬币，
+// 所以 P(至少 k 个饰品命中) = sum_{i>=k} C(n,i) / 2^n
+function signTestP(hits, total) {
+  if (!total) return NaN;
+  let logSum = -Infinity;
+  const logC = (n, k) => {
+    let s = 0;
+    for (let i = 0; i < k; i++) s += Math.log(n - i) - Math.log(i + 1);
+    return s;
+  };
+  for (let i = hits; i <= total; i++) {
+    const l = logC(total, i);
+    logSum = logSum === -Infinity ? l : Math.max(logSum, l) + Math.log(1 + Math.exp(-Math.abs(logSum - l)));
+  }
+  return Math.exp(logSum - total * Math.log(2));
+}
+
+console.log("特征               | 饰品数 | AUC>0.5 的 | 各饰品AUC中位数 | 符号检验 p");
+console.log("-------------------|--------|-----------|----------------|------------");
+for (const [f] of FEATURES) {
+  const perItemAucs = [];
+  for (const [, s] of perItem) {
+    if (s.manip.length < 24 || s.normal.length < 24) continue; // 至少各一天
+    const a = auc(s.manip.map((x) => x[f]), s.normal.map((x) => x[f]));
+    if (!Number.isNaN(a)) perItemAucs.push(a);
+  }
+  const above = perItemAucs.filter((a) => a > 0.5).length;
+  console.log(
+    `${f.padEnd(18)} | ${String(perItemAucs.length).padStart(6)} | ${String(above).padStart(9)} | ` +
+      `${median(perItemAucs).toFixed(3).padStart(14)} | ${signTestP(above, perItemAucs.length).toFixed(4)}`
   );
 }
 
