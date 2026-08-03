@@ -148,6 +148,21 @@ function auc(pos, neg) {
   return (rankSum - (pos.length * (pos.length + 1)) / 2) / (pos.length * neg.length);
 }
 
+/**
+ * 二值判据（"落在这一档" 1 / 0）预测"超额为负"的 AUC，按 2×2 计数直接算。
+ * 二值判据的 AUC 天生被并列压向 0.5（第二关），**所以它跟连续特征的 AUC 不能比大小**，
+ * 只能同一列内部横向比各档谁更强。
+ * @param posIn 该档内 excess<0 的样本数  @param posOut 档外 excess<0 的样本数
+ * @param negIn 该档内 excess>=0 的样本数 @param negOut 档外 excess>=0 的样本数
+ */
+function binaryAuc(posIn, posOut, negIn, negOut) {
+  const pos = posIn + posOut;
+  const neg = negIn + negOut;
+  if (!pos || !neg) return NaN;
+  // 判据为 1 的正类 vs 判据为 0 的负类 = 完全一致；同为 1 或同为 0 = 并列，各算半分
+  return (posIn * negOut + 0.5 * (posIn * negIn + posOut * negOut)) / (pos * neg);
+}
+
 /** 双尾符号检验 */
 function signTestP(hits, total) {
   if (!total) return NaN;
@@ -223,6 +238,8 @@ const SCALES = ["小时(线上实际)", "日(名字本意)"];
 const rsiAgg = new Map(); // `${scale}|${band}` -> []
 const trendAgg = new Map();
 const rsiPerItem = new Map(); // `${scale}|${band}` -> [每个饰品的超额中位数]
+// `${scale}|${band}` -> [每个饰品上"落在该档"这个二值判据的 AUC]
+const rsiBandAuc = new Map();
 const trendPerItem = new Map();
 // 配对检验用：`${scale}|${state}` -> Map(饰品 -> 该状态下的超额中位数)。
 // 要按饰品配对，就必须留住"哪个饰品"这个信息，trendPerItem 那个只留了值。
@@ -297,10 +314,23 @@ for (const [item, platform] of usableItems) {
 
   // 聚合进全局：档位样本进池，同时记下"这个饰品在这个档的超额中位数"给符号检验
   for (const [scaleKey, m] of [["小时(线上实际)", local.rsiH], ["日(名字本意)", local.rsiD]]) {
+    // 该尺度下这个饰品的全部样本，用来算"落在某档"这个二值判据的按标的 AUC
+    let totalPos = 0; // excess < 0 的样本数
+    let totalNeg = 0;
+    for (const vals of m.values()) {
+      for (const v of vals) { if (v < 0) totalPos += 1; else totalNeg += 1; }
+    }
     for (const [band, vals] of m) {
       if (!rsiAgg.has(`sum:${scaleKey}|${band}`)) rsiAgg.set(`sum:${scaleKey}|${band}`, []);
       rsiAgg.get(`sum:${scaleKey}|${band}`).push(...vals);
-      if (vals.length >= MIN_SAMPLES_PER_ITEM) push(rsiPerItem, `${scaleKey}|${band}`, median(vals));
+      if (vals.length >= MIN_SAMPLES_PER_ITEM) {
+        push(rsiPerItem, `${scaleKey}|${band}`, median(vals));
+        let posIn = 0;
+        let negIn = 0;
+        for (const v of vals) { if (v < 0) posIn += 1; else negIn += 1; }
+        const a = binaryAuc(posIn, totalPos - posIn, negIn, totalNeg - negIn);
+        if (!Number.isNaN(a)) push(rsiBandAuc, `${scaleKey}|${band}`, a);
+      }
     }
   }
   for (const [scaleKey, m] of [["小时(线上实际)", local.trendH], ["日(名字本意)", local.trendD]]) {
@@ -436,6 +466,51 @@ for (const scale of SCALES) {
 console.log("");
 console.log("这一节是「趋势项方向反了」这个结论的**主要依据**——它是同一饰品内部的比较，");
 console.log("不受饰品间差异和整体漂移影响。上面分状态的那两张表只是佐证。");
+
+// ---------- RSI 幅度专表：决定 v1 买入侧还留不留 ----------
+// 上一轮只报了方向（"RSI 方向是对的"），但方向对不等于能用——**能不能用取决于幅度**。
+// v1 的买入侧就是 RSI<30 → +30 → 达到 ENTRY_MIN_SCORE → 开仓，所以「<30 超卖」那一行的
+// 超额中位数直接就是"按 v1 买一次平均能多赚多少"，拿它跟一次往返的成本比即可。
+const COST_USER = 0.12; // 项目所有者给的换手成本口径
+// 库里能推出来的下界：买卖价差中位 5.72%（REPORT-bidding-depth-features.md，平时档）
+// + C5 卖出手续费 1%（lib/fees.ts）。提现费 0.9% 是批量行为不按笔摊，不计入。
+const COST_DERIVED = 0.0572 + 0.01;
+console.log("");
+console.log("=== RSI 幅度专表（决定 v1 买入侧还留不留）===");
+console.log("「按标的 AUC」= 每个饰品上「落在该档」这个**二值**判据预测「超额为负」的 AUC 的中位数。");
+console.log("二值判据天生重并列、AUC 被压向 0.5（第二关），**只能同列横比各档，不能跟连续特征比大小**。");
+for (const scale of SCALES) {
+  console.log("");
+  console.log(`【${scale}】`);
+  console.log("RSI 档位     | 超额中位数 | 为负占比 | 按标的AUC中位 | 饰品数 | vs 12%成本 | vs 6.7%成本");
+  console.log("-------------|-----------|---------|-------------|-------|-----------|------------");
+  for (const [band] of RSI_BANDS) {
+    const pooled = rsiAgg.get(`sum:${scale}|${band}`) ?? [];
+    const aucs = rsiBandAuc.get(`${scale}|${band}`) ?? [];
+    const med = median(pooled);
+    // 买入侧看的是"能不能赚回成本"，卖出侧看的是"跌幅够不够值得躲"，两边都取绝对幅度比
+    const mag = Math.abs(med);
+    console.log(
+      `${band.padEnd(12)} | ${fmt(med)} | ${fmt(pctNeg(pooled))} | ` +
+        `${aucs.length ? median(aucs).toFixed(3).padStart(11) : "     -     "} | ` +
+        `${String(aucs.length).padStart(5)} | ` +
+        `${(mag >= COST_USER ? "  够" : "  不够").padEnd(9)} | ${mag >= COST_DERIVED ? "  够" : "  不够"}`
+    );
+  }
+}
+console.log("");
+console.log(`两条成本线：**12%** 是项目所有者给的口径；**${(COST_DERIVED * 100).toFixed(1)}%** 是库里能推出来的下界`);
+console.log("（买卖价差中位 5.72% + C5 手续费 1%，提现费 0.9% 是批量行为不按笔摊所以没算）。");
+console.log("**两条线不影响结论**——RSI 最大的那一档也差着一个数量级，对 12% 和 6.7% 都不够。");
+console.log("");
+console.log("对照：v2 的 >30% 涨幅档超额中位 **−18.69%**、71.4% 为负，那一档对两条成本线都够。");
+console.log("");
+console.log("**v1 买入侧的判决**：买入侧走的是 RSI<30 → +30 → 达到 ENTRY_MIN_SCORE 开仓，");
+console.log(`所以看「<30 超卖」那一行——小时尺度 ${fmt(median(rsiAgg.get("sum:小时(线上实际)|<30 超卖") ?? []))}、` +
+  `日尺度 ${fmt(median(rsiAgg.get("sum:日(名字本意)|<30 超卖") ?? []))}。`);
+console.log("方向是对的（正的），但**幅度只有零点几个百分点，而一次往返要 6.7%~12%**。");
+console.log("也就是说：**按 v1 买入侧开的仓，期望超额收益连手续费和价差都赚不回来**，");
+console.log("这不是「信号弱」，是「信号存在但被交易成本整个吃掉」——两者的处理方式一样：不能靠它开仓。");
 
 console.log("");
 console.log("=== 经济显著性：幅度够不够覆盖交易成本 ===");
