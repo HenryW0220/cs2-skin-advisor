@@ -2,6 +2,7 @@ import { addAnomalyEvent, hasRecentAnomalyEvent } from "./db/anomaly-events";
 import { listItemMetadata } from "./db/item-metadata";
 import { getPriceHistory, getRecentPriceHistory } from "./db/snapshots";
 import { sendPushNotification } from "./api/web-push";
+import { displayGroupName, isDerivedGroup } from "./item-metadata-groups";
 import { detectPriceZScoreAnomaly, scanPriceZScoreAnomalies } from "./signals/anomaly";
 import { computeManipulationScore } from "./signals/manipulation-score";
 import { computeMomentumChaseSignal } from "./signals/momentum-chase";
@@ -212,6 +213,39 @@ export async function scanForAnomalies(): Promise<IAnomalyScanSummary> {
           url: `/item/${encodeURIComponent(itemName)}`,
         });
       }
+    }
+  }
+
+  // 同组联动（2026-08-03）：同赛事胶囊的印花、同组织的探员是**平级**同涨同跌关系，
+  // 没有上面那种"上级拉升→下级炼金料跟涨"的层级链条，所以单独一段、不套用 rarity_rank 排序
+  // （这两类饰品本来也没有 rarity_rank）。分组来源见 lib/item-metadata-groups.ts，
+  // 依据是实测：按胶囊/组织分组后 25/26 个饰品的联动特征同方向、24h 联动 AUC 中位 0.651。
+  //
+  // **观察期内只入库、不推送**（项目所有者定的口径）：这批预警的可靠性还没验证过，
+  // 印花/探员同涨同跌比皮肤密集，直接开推送有把通知变成骚扰、被整个关掉的风险。
+  // 判断依据要用数据不用感觉——观察期结束时统计 group_linkage 的触发次数、其中多少
+  // 真正值得看、密集程度，再决定要不要接进 pushNotifications。
+  for (const [triggerName, trigger] of triggered) {
+    const triggerMeta = metaByName.get(triggerName);
+    if (!triggerMeta?.collection || !isDerivedGroup(triggerMeta.collection)) continue;
+
+    for (const itemName of itemNames) {
+      if (itemName === triggerName || triggered.has(itemName)) continue;
+      if (metaByName.get(itemName)?.collection !== triggerMeta.collection) continue;
+
+      const latest = latestByItem.get(itemName);
+      if (!latest || hasRecentAnomalyEvent(itemName, "group_linkage", cooldownSince)) continue;
+
+      const created = addAnomalyEvent({
+        item_name: itemName,
+        platform: latest.platform,
+        metric: "group_linkage",
+        detected_at: latest.captured_at,
+        value: trigger.value,
+        price: latest.price,
+        context: `同组「${displayGroupName(triggerMeta.collection)}」的 ${triggerName} 异动（${trigger.label}），同一批发行的饰品常同涨同跌，本品可能跟随`,
+      });
+      if (created) eventsCreated += 1;
     }
   }
 

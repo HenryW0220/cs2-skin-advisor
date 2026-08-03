@@ -1,4 +1,5 @@
 import { fetchItemStructureMap } from "./api/cs-item-db";
+import { deriveLinkageGroup } from "./item-metadata-groups";
 import { listInventory } from "./db/inventory";
 import { upsertItemMetadata } from "./db/item-metadata";
 import { listWatchlist } from "./db/watchlist";
@@ -31,9 +32,14 @@ export async function syncItemMetadata(): Promise<IItemMetadataSyncSummary> {
     } else {
       unmatched += 1;
     }
+    // 皮肤数据集里没有的（印花/探员）退回按名字推导联动分组——它们天然没有收藏品，
+    // 不补的话同收藏品联动特征对这批饰品恒为 0（详见 lib/item-metadata-groups.ts）。
+    // 真实收藏品优先，推导只在缺失时兜底，不会覆盖官方数据。
+    const derived = info?.collection ? null : deriveLinkageGroup(name);
     upsertItemMetadata({
       item_name: name,
-      collection: info?.collection ?? null,
+      collection: info?.collection ?? derived,
+      collection_source: info?.collection || !derived ? "official" : "derived",
       crate: info?.crate ?? null,
       rarity: info?.rarity ?? null,
       rarity_rank: info?.rarityRank ?? null,

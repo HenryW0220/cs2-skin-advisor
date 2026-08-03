@@ -1,21 +1,26 @@
 import { getDb } from "./client";
+import type { ICollectionSource } from "../item-metadata-groups";
 import type { IItemMetadata } from "../types";
 
 export function upsertItemMetadata(
-  meta: Pick<IItemMetadata, "item_name" | "collection" | "crate" | "rarity" | "rarity_rank">
+  meta: Pick<
+    IItemMetadata,
+    "item_name" | "collection" | "crate" | "rarity" | "rarity_rank"
+  > & { collection_source?: ICollectionSource }
 ): void {
   getDb()
     .prepare(
-      `INSERT INTO item_metadata (item_name, collection, crate, rarity, rarity_rank)
-       VALUES (@item_name, @collection, @crate, @rarity, @rarity_rank)
+      `INSERT INTO item_metadata (item_name, collection, collection_source, crate, rarity, rarity_rank)
+       VALUES (@item_name, @collection, @collection_source, @crate, @rarity, @rarity_rank)
        ON CONFLICT(item_name) DO UPDATE SET
          collection = excluded.collection,
+         collection_source = excluded.collection_source,
          crate = excluded.crate,
          rarity = excluded.rarity,
          rarity_rank = excluded.rarity_rank,
          updated_at = datetime('now')`
     )
-    .run(meta);
+    .run({ collection_source: "official", ...meta });
 }
 
 export function getItemMetadata(itemName: string): IItemMetadata | undefined {

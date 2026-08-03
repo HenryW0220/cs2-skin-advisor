@@ -16,6 +16,7 @@ const METRIC_LABEL: Record<IAnomalyMetric, string> = {
   volume_ratio: "成交量放大",
   manipulation_score: "操盘嫌疑",
   collection_linkage: "联动预警",
+  group_linkage: "同组联动",
   washout_signal: "疑似洗盘",
   momentum_chase: "追涨风险",
 };
@@ -29,6 +30,9 @@ const METRIC_STYLE: Record<IAnomalyMetric, string> = {
   volume_ratio: "bg-orange-500/15 text-orange-400",
   manipulation_score: "bg-red-500/15 text-red-400",
   collection_linkage: "bg-purple-500/15 text-purple-300",
+  // 同组联动跟收藏品联动同属"别人动了、这个可能跟着动"，用同色系但更淡一档区分开：
+  // 它是平级同涨同跌，不是上级→下级的炼金链条，可靠性还在观察期
+  group_linkage: "bg-purple-500/10 text-purple-400/80",
   washout_signal: "bg-blue-500/15 text-blue-300",
   momentum_chase: "bg-yellow-500/15 text-yellow-300",
 };
@@ -43,6 +47,8 @@ function formatMetricValue(metric: IAnomalyMetric, value: number): string {
       return `嫌疑分 ${value.toFixed(0)}`;
     case "collection_linkage":
       return `上级信号强度 ${value.toFixed(1)}`;
+    case "group_linkage":
+      return `同组信号强度 ${value.toFixed(1)}`;
     case "washout_signal":
       return `回撤 ${value.toFixed(1)}%`;
     case "momentum_chase":

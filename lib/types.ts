@@ -1,3 +1,5 @@
+import type { ICollectionSource } from "./item-metadata-groups";
+
 export interface IInventoryItem {
   id: number;
   item_name: string; // 英文 market_hash_name，跨 SteamDT/C5 查价用的 key，不直接展示给用户
@@ -40,7 +42,11 @@ export type IAnomalyMetric =
   | "manipulation_score"
   | "collection_linkage"
   | "washout_signal"
-  | "momentum_chase";
+  | "momentum_chase"
+  // group_linkage 是"同赛事胶囊的印花 / 同组织的探员"平级联动预警，跟 collection_linkage
+  // 的层级语义（上级拉升→下级炼金料跟涨）不同，分开是为了能单独统计这批预警的质量、
+  // 也为了观察期内只入库不推送（2026-08-03 起）。
+  | "group_linkage";
 // confirmed=确认操盘（正样本）；external=外部事件驱动的真实行情（版本更新/炼金开放/
 // 大赛等，困难负样本，review_note 记录具体事件）；dismissed=正常波动（普通负样本）。
 //
@@ -77,7 +83,10 @@ export interface IAnomalyEvent {
 export interface IItemMetadata {
   id: number;
   item_name: string;
+  // 联动分组。皮肤是 ByMykel 数据集里的真实收藏品名；印花/探员没有收藏品这个概念，
+  // 装的是从名字推出来的胶囊/组织（带 capsule:/agentgroup: 前缀），见 lib/item-metadata-groups.ts
   collection: string | null;
+  collection_source: ICollectionSource;
   crate: string | null;
   rarity: string | null;
   rarity_rank: number | null;
