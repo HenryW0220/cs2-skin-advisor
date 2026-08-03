@@ -5,10 +5,13 @@ import {
   listOpenPaperTrades,
   openPaperTrade,
 } from "./db/paper-trades";
+import { recordShadowSellSignal } from "./db/shadow-sell-signals";
 import { getLatestPricesByPlatform } from "./db/snapshots";
 import { listWatchlist } from "./db/watchlist";
 import { netSellPrice } from "./fees";
-import { computeSignalSummary, pickReferencePlatform } from "./signal-summary";
+import { evaluateSellV2 } from "./rules/sell-rule-v2";
+import { computeSignalSummary, pickReferencePlatform, type ISignalSummary } from "./signal-summary";
+import type { IPaperTrade } from "./types";
 
 // 开仓门槛：规则引擎买入侧 score ≥ 30，等于至少 RSI 超卖（+30）这个量级的信号——
 // 纯"趋势走强"只有 +15，作为买入依据太弱，会把模拟盘灌满噪声交易。
@@ -50,6 +53,34 @@ export interface IPaperTradingSummary {
  *   这偏乐观——真挂单可能要压价才卖得掉，低价品还有流动性折价（PLAN.md C3 提过）。
  * - 不模拟仓位大小，每笔都是"1 件"，收益率按单件算。
  */
+/**
+ * 把影子规则 v2 的判断记一条，不影响本轮任何真实动作。
+ * 失败不能影响模拟盘本身——这只是个观察记录，出问题宁可少一条数据也不能让平仓逻辑挂掉。
+ */
+function recordShadowDecision(trade: IPaperTrade, summary: ISignalSummary): void {
+  try {
+    const verdict = evaluateSellV2({
+      // changeToday 是百分数，规则那边要的是小数
+      return24h: (summary.changeToday?.percent ?? 0) / 100,
+      hourlyPrices: summary.recentPrices,
+    });
+    recordShadowSellSignal({
+      trade_id: trade.id,
+      item_name: trade.item_name,
+      platform: trade.platform,
+      rule_version: "v2",
+      action: verdict.action,
+      reason: verdict.reason,
+      price: summary.signals.price,
+      return_24h: (summary.changeToday?.percent ?? 0) / 100,
+      drawdown_48h: verdict.drawdown48h,
+      decided_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("[paper-trading] 影子规则记录失败（不影响模拟盘）：", err);
+  }
+}
+
 export function runPaperTradingTick(): IPaperTradingSummary {
   const now = Date.now();
   let opened = 0;
@@ -87,6 +118,13 @@ export function runPaperTradingTick(): IPaperTradingSummary {
       closed += 1;
       continue;
     }
+
+    // 影子卖出规则（v2）并行记录。**只记不做**——真实平仓仍然完全由下面的 v1 决定。
+    // 现有 v1 卖出侧结构上永远触发不了（HANDOFF 踩坑 43），v2 的阈值是从回测反推的
+    // （lib/rules/sell-rule-v2.ts 文件头有完整依据表）。按项目所有者定的口径，替换之前
+    // 要先并行跑至少一轮拿到触发次数和假信号率，评估脚本是
+    // scripts/report-shadow-sell-signals.mjs。
+    recordShadowDecision(trade, summary);
 
     const sellSignal = summary.rule.action === "SELL";
     if (!sellSignal && !timedOut) continue;

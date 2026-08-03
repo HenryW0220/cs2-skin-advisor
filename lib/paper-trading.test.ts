@@ -28,6 +28,9 @@ const state = vi.hoisted(() => {
     score: number;
     price: number;
     action: string;
+    // 影子卖出规则用的两个输入，不填就按"没有涨跌数据 + 只有当前价"处理
+    changeTodayPercent?: number;
+    recentPrices?: number[];
   }
 
   return {
@@ -39,6 +42,8 @@ const state = vi.hoisted(() => {
     platforms: {} as Record<string, string | null>,
     // itemName -> 各平台最后一条已知快照。信号窗口内没数据但要按最后已知价强制平仓时才读。
     latestPrices: {} as Record<string, { platform: string; price: number; captured_at: string }[]>,
+    // 影子卖出规则记了什么，用例里断言用。它不该影响任何真实平仓行为。
+    shadowSignals: [] as Record<string, unknown>[],
   };
 });
 
@@ -91,6 +96,14 @@ vi.mock("./db/watchlist", () => ({
   listWatchlist: () => state.watchlistItems.map((item_name) => ({ item_name })),
 }));
 
+// 影子卖出规则的记录表：必须 mock 掉，否则单测会去开真实的 data/db.sqlite 并写入
+vi.mock("./db/shadow-sell-signals", () => ({
+  recordShadowSellSignal: (signal: Record<string, unknown>) => {
+    state.shadowSignals.push(signal);
+    return true;
+  },
+}));
+
 vi.mock("./db/snapshots", () => ({
   getLatestPricesByPlatform: (itemName: string) => state.latestPrices[itemName] ?? [],
 }));
@@ -104,6 +117,13 @@ vi.mock("./signal-summary", () => ({
     return {
       rule: { action: signal.action, score: signal.score, reasons: [`mock:${itemName}`] },
       signals: { price: signal.price },
+      // 影子卖出规则要读这两个（lib/rules/sell-rule-v2.ts）。少了的话它会在
+      // recordShadowDecision 的 try/catch 里静默抛错，整条路径等于没被测到——
+      // 第一版就是这样，测试全绿但影子逻辑一次都没真正执行过。
+      changeToday: signal.changeTodayPercent === undefined
+        ? null
+        : { absolute: 0, percent: signal.changeTodayPercent },
+      recentPrices: signal.recentPrices ?? [signal.price],
     };
   },
   pickReferencePlatform: (itemName: string) =>
@@ -118,6 +138,7 @@ beforeEach(() => {
   state.nextId = 1;
   state.watchlistItems = [];
   state.summaries = {};
+  state.shadowSignals = [];
   state.platforms = {};
   state.latestPrices = {};
 });
@@ -399,5 +420,81 @@ describe("runPaperTradingTick — 平仓", () => {
     expect(result).toEqual({ opened: 0, closed: 1 });
     expect(state.trades).toHaveLength(1);
     expect(state.trades[0].status).toBe("closed");
+  });
+});
+
+describe("影子卖出规则 v2 并行记录", () => {
+  function seedOpenTrade(openedDaysAgo = 10) {
+    state.trades = [
+      {
+        id: 1,
+        item_name: "Item A",
+        platform: "C5",
+        buy_price: 10,
+        buy_score: 30,
+        buy_reasons: [],
+        opened_at: isoDaysAgo(openedDaysAgo),
+        status: "open",
+        sell_price: null,
+        sell_net_price: null,
+        sell_score: null,
+        sell_reasons: null,
+        close_reason: null,
+        closed_at: null,
+      },
+    ];
+  }
+
+  it("过了 T+7 的仓位每轮都会记一条影子判断", () => {
+    seedOpenTrade();
+    state.summaries["Item A"] = {
+      score: 0,
+      price: 13,
+      action: "HOLD",
+      changeTodayPercent: 35,
+      recentPrices: [10, 11, 13],
+    };
+
+    runPaperTradingTick();
+
+    expect(state.shadowSignals).toHaveLength(1);
+    expect(state.shadowSignals[0]).toMatchObject({
+      trade_id: 1,
+      rule_version: "v2",
+      action: "SELL_STRONG",
+    });
+  });
+
+  // 这是并行期的核心约束：v2 说卖，真实仓位也**不能**动——真实平仓仍然只看 v1
+  it("影子规则触发卖出时不会真的平仓", () => {
+    seedOpenTrade();
+    state.summaries["Item A"] = {
+      score: 0, // v1 给 HOLD
+      price: 13,
+      action: "HOLD",
+      changeTodayPercent: 35, // v2 会给 SELL_STRONG
+      recentPrices: [10, 11, 13],
+    };
+
+    const result = runPaperTradingTick();
+
+    expect(state.shadowSignals[0].action).toBe("SELL_STRONG");
+    expect(result.closed).toBe(0);
+    expect(state.trades[0].status).toBe("open");
+  });
+
+  it("T+7 锁定期内不记——那时候卖不掉，记了也不是可执行的判断", () => {
+    seedOpenTrade(3);
+    state.summaries["Item A"] = {
+      score: 0,
+      price: 13,
+      action: "HOLD",
+      changeTodayPercent: 35,
+      recentPrices: [10, 11, 13],
+    };
+
+    runPaperTradingTick();
+
+    expect(state.shadowSignals).toHaveLength(0);
   });
 });
