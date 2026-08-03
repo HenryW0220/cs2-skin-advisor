@@ -21,7 +21,9 @@
 - **数据库**：better-sqlite3（SQLite 本地文件）
 - **样式**：Tailwind CSS v4
 - **包管理**：npm
-- **数据源**：SteamDT OpenAPI（K线、报价、成交量）、C5Game OpenAPI（库存、订单）
+- **数据源**：SteamDT OpenAPI（K线、报价、在售量、求购深度）、C5Game OpenAPI（库存、订单）
+  - ⚠️ **没有任何数据源返回真实成交量**。SteamDT 的 `sellCount` / C5 K 线的 `entry.count` 都是
+    **在售挂单数量（存量）**，不是成交量（流量）。细节见 `lib/types.ts` 里 `volume` 列的注释
 - **LLM**：NVIDIA NIM API（免费，兼容 OpenAI SDK 格式）
 
 ---
@@ -42,7 +44,7 @@
 │   │   ├── steamdt.ts      # SteamDT API
 │   │   ├── c5.ts           # C5Game API
 │   │   └── nvidia-llm.ts   # NVIDIA NIM LLM 调用
-│   ├── signals/            # 技术指标计算（MA、RSI、成交量）
+│   ├── signals/            # 技术指标计算（MA、RSI、嫌疑分、洗盘、追涨）
 │   ├── rules/              # 规则引擎（决策逻辑）
 │   └── types.ts            # 全局 TypeScript 类型
 ├── components/             # React UI 组件
@@ -87,7 +89,7 @@
 
 ### 注释规范
 - 注释解释"为什么"，不解释"是什么"——变量/函数名本身要能说明在做什么，重复一遍代码逻辑的注释不要写
-- 导出的函数（尤其是 `lib/signals/`、`lib/rules/`、`lib/api/` 里的）用 JSDoc 写清楚：参数含义、返回值、隐藏的前提条件或单位（如"价格单位是分还是元"、"RSI 周期是 14 天"）
+- 导出的函数（尤其是 `lib/signals/`、`lib/rules/`、`lib/api/` 里的）用 JSDoc 写清楚：参数含义、返回值、隐藏的前提条件或单位（如"价格单位是分还是元"、"RSI 周期是 14 个小时桶不是 14 天"——后一个正是 2026-08-03 查出来的真实歧义，见踩坑 45）
 - 非显而易见的业务规则（如规则引擎里某个阈值为什么是这个数字、为什么要排除某种饰品）必须写明依据来源，方便几个月后回来看还能懂
 - 不要保留注释掉的代码——要删的代码直接删，git 历史里能找回来
 - 不要写"修改记录"类注释（如 `// 2024-01 改成这样` ），这类信息属于 git commit，不属于代码
@@ -100,7 +102,7 @@
 ```
 SteamDT API → 价格快照（price_snapshots 表）
      ↓
-lib/signals/ → 计算 MA7、MA30、RSI14、成交量异常
+lib/signals/ → 计算 MA7、MA30、RSI14（都是**小时桶**不是天，见踩坑 45）
      ↓
 lib/rules/ → 规则引擎输出 action（SELL/TRIM/HOLD/WATCH）+ score
      ↓
@@ -174,7 +176,7 @@ refactor(ui): 拆分 InventoryTable 为子组件
    - [x] Steam 官方库存自动导入（`POST /api/inventory/import-steam`，按 marketHashName 去重，成本价未知先填 0，需要手动 PATCH 改成真实购入价）
 
 2. **Phase 2 — 信号与规则**
-   - [x] 技术指标计算（MA7/30、RSI14、成交量异常）
+   - [x] 技术指标计算（MA7/30、RSI14；成交量异动已于 2026-08-03 删除，见踩坑 43）
    - [x] 规则引擎（输出 SELL/TRIM/HOLD/WATCH + score，权重是经验值，跑一段时间后需要回来调）
    - [x] 跨平台价差计算（C5 vs Steam）
 
