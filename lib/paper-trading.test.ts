@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runPaperTradingTick } from "./paper-trading";
+import type { PaperTradeCloseReason } from "./types";
 
 // runPaperTradingTick 直接依赖 better-sqlite3 的 db 模块和 signal-summary 的规则引擎调用，
 // 不 mock 掉这些没法在不碰真实数据库的前提下单测"开仓/平仓/冷却"这套决策逻辑本身。
@@ -20,7 +21,7 @@ const state = vi.hoisted(() => {
     sell_net_price: number | null;
     sell_score: number | null;
     sell_reasons: string[] | null;
-    close_reason: "sell_signal" | "timeout" | "stale_data" | null;
+    close_reason: PaperTradeCloseReason | null;
     closed_at: string | null;
   }
 
@@ -83,7 +84,7 @@ vi.mock("./db/paper-trades", () => ({
     sell_net_price: number;
     sell_score: number | null;
     sell_reasons: string[];
-    close_reason: "sell_signal" | "timeout" | "stale_data";
+    close_reason: PaperTradeCloseReason;
     closed_at: string;
   }) => {
     const trade = state.trades.find((t) => t.id === input.id && t.status === "open");
@@ -311,9 +312,15 @@ describe("runPaperTradingTick — 平仓", () => {
     ];
   }
 
-  it("T+7 锁定期内即使有卖出信号也不平仓", () => {
+  it("T+7 锁定期内即使 v2 出强卖出也不平仓", () => {
     seedOpenTrade({ opened_at: isoDaysAgo(3) });
-    state.summaries["Item A"] = { score: -50, price: 8, action: "SELL" };
+    state.summaries["Item A"] = {
+      score: 0,
+      price: 8,
+      action: "HOLD",
+      changeTodayPercent: 35,
+      recentPrices: [6, 7, 8],
+    };
 
     const result = runPaperTradingTick();
 
@@ -321,24 +328,89 @@ describe("runPaperTradingTick — 平仓", () => {
     expect(state.trades[0].status).toBe("open");
   });
 
-  it("锁定期后出现卖出信号时平仓，按 C5 1% 手续费结算净价", () => {
+  it("锁定期后 v2 出普通卖出（24h 涨幅 15~30%）时平仓，按 C5 1% 手续费结算净价", () => {
     seedOpenTrade({ opened_at: isoDaysAgo(8), buy_price: 10 });
-    state.summaries["Item A"] = { score: -50, price: 20, action: "SELL" };
+    state.summaries["Item A"] = {
+      score: 0, // v1 给 HOLD——平仓已经跟 v1 无关了
+      price: 20,
+      action: "HOLD",
+      changeTodayPercent: 18,
+      recentPrices: [15, 17, 20],
+    };
 
     const result = runPaperTradingTick();
 
     expect(result.closed).toBe(1);
     const trade = state.trades[0];
     expect(trade.status).toBe("closed");
-    expect(trade.close_reason).toBe("sell_signal");
+    expect(trade.close_reason).toBe("sell_rule_v2");
     expect(trade.sell_price).toBe(20);
     expect(trade.sell_net_price).toBeCloseTo(19.8, 6);
-    expect(trade.sell_score).toBe(-50);
+    // v2 不产出 score，存 null 不存 0
+    expect(trade.sell_score).toBeNull();
   });
 
-  it("持有超过 30 天没有卖出信号时强制超时平仓", () => {
+  it("锁定期后 v2 出强卖出（24h 涨幅 ≥30%）时平仓，close_reason 跟普通档分开记", () => {
+    seedOpenTrade({ opened_at: isoDaysAgo(8), buy_price: 10 });
+    state.summaries["Item A"] = {
+      score: 0,
+      price: 20,
+      action: "HOLD",
+      changeTodayPercent: 42,
+      recentPrices: [14, 17, 20],
+    };
+
+    const result = runPaperTradingTick();
+
+    expect(result.closed).toBe(1);
+    expect(state.trades[0].close_reason).toBe("sell_rule_v2_strong");
+    expect(state.trades[0].sell_score).toBeNull();
+  });
+
+  // 5~15% 这一档回测超额只有 -3% 上下，扣手续费后不值得换手，v2 刻意不触发。
+  // 这条防的是"把阈值往下挪一点点"这种手感式改动。
+  it("v2 的整涨幅但没到卖出档（5~15%）不平仓", () => {
+    seedOpenTrade({ opened_at: isoDaysAgo(10) });
+    state.summaries["Item A"] = {
+      score: 0,
+      price: 12,
+      action: "HOLD",
+      changeTodayPercent: 12,
+      recentPrices: [11, 11.5, 12],
+    };
+
+    const result = runPaperTradingTick();
+
+    expect(result.closed).toBe(0);
+    expect(state.trades[0].status).toBe("open");
+  });
+
+  // 洗盘否决：48h 深回撤 + 低涨幅时回测超额反而是正的（+2%~+3.7%），明确不卖
+  it("洗盘形态（深回撤 + 低涨幅）时 v2 否决卖出，不平仓", () => {
+    seedOpenTrade({ opened_at: isoDaysAgo(10) });
+    state.summaries["Item A"] = {
+      score: 0,
+      price: 8,
+      action: "HOLD",
+      changeTodayPercent: 2,
+      recentPrices: [10, 12, 8], // 峰值 12 → 现价 8，回撤 33%
+    };
+
+    const result = runPaperTradingTick();
+
+    expect(result.closed).toBe(0);
+    expect(state.trades[0].status).toBe("open");
+  });
+
+  it("持有超过 30 天且 v2 说不卖时仍然强制超时平仓", () => {
     seedOpenTrade({ opened_at: isoDaysAgo(31), buy_price: 10 });
-    state.summaries["Item A"] = { score: 0, price: 15, action: "HOLD" };
+    state.summaries["Item A"] = {
+      score: 0,
+      price: 15,
+      action: "HOLD",
+      changeTodayPercent: 1,
+      recentPrices: [14, 15],
+    };
 
     const result = runPaperTradingTick();
 
@@ -347,9 +419,33 @@ describe("runPaperTradingTick — 平仓", () => {
     expect(state.trades[0].sell_price).toBe(15);
   });
 
-  it("锁定期后没有卖出信号也没超时，继续持仓", () => {
+  // 超时和卖出信号同时成立时记成卖出档，不记 timeout——timeout 的含义是"等满 30 天
+  // 也没等到信号"，这里明明等到了，混记会让评估时高估超时平仓的占比。
+  it("既超时又触发 v2 卖出档时，close_reason 记卖出档", () => {
+    seedOpenTrade({ opened_at: isoDaysAgo(31), buy_price: 10 });
+    state.summaries["Item A"] = {
+      score: 0,
+      price: 20,
+      action: "HOLD",
+      changeTodayPercent: 40,
+      recentPrices: [14, 17, 20],
+    };
+
+    runPaperTradingTick();
+
+    expect(state.trades[0].close_reason).toBe("sell_rule_v2_strong");
+  });
+
+  // v1 的 SELL 不再有任何平仓效力——真实建议还走 v1，但模拟账本已经完全交给 v2
+  it("v1 给 SELL 但 v2 说 HOLD 时不平仓", () => {
     seedOpenTrade({ opened_at: isoDaysAgo(10) });
-    state.summaries["Item A"] = { score: 0, price: 12, action: "HOLD" };
+    state.summaries["Item A"] = {
+      score: -55,
+      price: 12,
+      action: "SELL",
+      changeTodayPercent: 1,
+      recentPrices: [11, 11.5, 12],
+    };
 
     const result = runPaperTradingTick();
 
@@ -413,10 +509,12 @@ describe("runPaperTradingTick — 平仓", () => {
   it("先平后开：本轮平仓的饰品立即受冷却限制，不会当轮重新开仓", () => {
     seedOpenTrade({ opened_at: isoDaysAgo(8), buy_price: 10 });
     state.watchlistItems = ["Item A"];
-    // 平仓评估（holding=true）看到 SELL；开仓评估（holding=false）本身信号达标，
+    // 平仓评估（holding=true）时 v2 出卖出档；开仓评估（holding=false）本身信号达标，
     // 唯一能拦住重新开仓的只有"刚平仓触发的冷却"——验证的就是这条边界。
     state.summaries["Item A"] = (holding: boolean) =>
-      holding ? { score: -50, price: 20, action: "SELL" } : { score: 50, price: 21, action: "HOLD" };
+      holding
+        ? { score: 0, price: 20, action: "HOLD", changeTodayPercent: 40, recentPrices: [14, 17, 20] }
+        : { score: 50, price: 21, action: "HOLD" };
 
     const result = runPaperTradingTick();
 
@@ -426,7 +524,7 @@ describe("runPaperTradingTick — 平仓", () => {
   });
 });
 
-describe("影子卖出规则 v2 并行记录", () => {
+describe("卖出规则 v2 的影子记录", () => {
   function seedOpenTrade(openedDaysAgo = 10) {
     state.trades = [
       {
@@ -468,22 +566,27 @@ describe("影子卖出规则 v2 并行记录", () => {
     });
   });
 
-  // 这是并行期的核心约束：v2 说卖，真实仓位也**不能**动——真实平仓仍然只看 v1
-  it("影子规则触发卖出时不会真的平仓", () => {
+  // 2026-08-03 之前这条锁的是相反的语义（"v2 说卖，仓位必须还是 open"），那是并行期
+  // 的约束。现在模拟盘平仓已经交给 v2，所以要锁的变成"影子记录和真实平仓必须同源"：
+  // 同一轮里两边看到的必须是同一个判定，否则影子表和模拟盘流水对不上，
+  // 并行期攒的那些数字就没法跟平仓结果互相印证。
+  it("影子记录的动作跟真实平仓的档位是同一次判定", () => {
     seedOpenTrade();
     state.summaries["Item A"] = {
-      score: 0, // v1 给 HOLD
+      score: 0,
       price: 13,
       action: "HOLD",
-      changeTodayPercent: 35, // v2 会给 SELL_STRONG
+      changeTodayPercent: 35,
       recentPrices: [10, 11, 13],
     };
 
     const result = runPaperTradingTick();
 
     expect(state.shadowSignals[0].action).toBe("SELL_STRONG");
-    expect(result.closed).toBe(0);
-    expect(state.trades[0].status).toBe("open");
+    expect(result.closed).toBe(1);
+    expect(state.trades[0].close_reason).toBe("sell_rule_v2_strong");
+    // 平仓理由就是 v2 那条判定的 reason，两边同源
+    expect(state.trades[0].sell_reasons).toEqual([state.shadowSignals[0].reason]);
   });
 
   it("T+7 锁定期内不记——那时候卖不掉，记了也不是可执行的判断", () => {
@@ -499,5 +602,56 @@ describe("影子卖出规则 v2 并行记录", () => {
     runPaperTradingTick();
 
     expect(state.shadowSignals).toHaveLength(0);
+  });
+
+  it("HOLD 的仓位照常记影子，不会因为不平仓就漏记", () => {
+    seedOpenTrade();
+    state.summaries["Item A"] = {
+      score: 0,
+      price: 13,
+      action: "HOLD",
+      changeTodayPercent: 3,
+      recentPrices: [12, 12.5, 13],
+    };
+
+    const result = runPaperTradingTick();
+
+    expect(result.closed).toBe(0);
+    expect(state.shadowSignals).toHaveLength(1);
+    expect(state.shadowSignals[0].action).toBe("HOLD");
+  });
+});
+
+describe("PAPER_TRADING_DISABLED 止血开关", () => {
+  it("置 1 时整个 tick 跳过：不开仓、不平仓、不记影子", () => {
+    vi.stubEnv("PAPER_TRADING_DISABLED", "1");
+    state.trades = [
+      {
+        id: 1,
+        item_name: "Item A",
+        platform: "C5",
+        buy_price: 10,
+        buy_score: 30,
+        buy_reasons: [],
+        opened_at: isoDaysAgo(31), // 既过 T+7 又超时，正常一定会被平掉
+        status: "open",
+        sell_price: null,
+        sell_net_price: null,
+        sell_score: null,
+        sell_reasons: null,
+        close_reason: null,
+        closed_at: null,
+      },
+    ];
+    state.watchlistItems = ["Item B"];
+    state.summaries["Item A"] = { score: 0, price: 12, action: "HOLD", changeTodayPercent: 40 };
+    state.summaries["Item B"] = { score: 80, price: 10, action: "HOLD" };
+
+    const result = runPaperTradingTick();
+
+    expect(result).toEqual({ opened: 0, closed: 0 });
+    expect(state.trades[0].status).toBe("open");
+    expect(state.shadowSignals).toHaveLength(0);
+    vi.unstubAllEnvs();
   });
 });

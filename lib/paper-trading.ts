@@ -9,9 +9,9 @@ import { getLastShadowSellSignal, recordShadowSellSignal } from "./db/shadow-sel
 import { getLatestPricesByPlatform } from "./db/snapshots";
 import { listWatchlist } from "./db/watchlist";
 import { netSellPrice } from "./fees";
-import { evaluateSellV2 } from "./rules/sell-rule-v2";
+import { evaluateSellV2, type ISellV2Result } from "./rules/sell-rule-v2";
 import { computeSignalSummary, pickReferencePlatform, type ISignalSummary } from "./signal-summary";
-import type { IPaperTrade } from "./types";
+import type { IPaperTrade, PaperTradeCloseReason } from "./types";
 
 // 开仓门槛：规则引擎买入侧 score ≥ 30，等于至少 RSI 超卖（+30）这个量级的信号——
 // 纯"趋势走强"只有 +15，作为买入依据太弱，会把模拟盘灌满噪声交易。
@@ -27,9 +27,9 @@ const MIN_ENTRY_PRICE = 1;
 // 不带这条约束的模拟数字全是假的（PLAN.md 原则 6：60% 的历史盘 7 天内就过峰）。
 const T7_LOCK_MS = 7 * 24 * 60 * 60 * 1000;
 
-// 规则引擎的 SELL 阈值（score ≤ -40）要 RSI 超买+趋势走弱这种组合才够得着，冷清的品
-// 可能长期不触发——超过这个天数还没信号就按当前价强制平仓，不然仓位永远挂着，
-// 统计里全是没结论的未平仓交易。30 天也和"观察池信号验证"的耐心上限差不多。
+// 卖出信号可能长期不触发（v2 要 24h 涨幅 ≥15%，回测里这三档合计只占全部饰品-小时的
+// 2.7%）——超过这个天数还没信号就按当前价强制平仓，不然仓位永远挂着，统计里全是
+// 没结论的未平仓交易。30 天也和"观察池信号验证"的耐心上限差不多。这是兜底，不是卖出规则。
 const MAX_HOLD_MS = 30 * 24 * 60 * 60 * 1000;
 
 // 平仓后同一饰品的再开仓冷却。信号在阈值附近抖动时会平了马上又开，
@@ -50,18 +50,37 @@ export interface IPaperTradingSummary {
   closed: number;
 }
 
+/** v2 判定当时的 24h 涨跌幅，**小数不是百分数**（changeToday 存的是百分数）。 */
+function return24hOf(summary: ISignalSummary): number {
+  return (summary.changeToday?.percent ?? 0) / 100;
+}
+
 /**
- * 把影子规则 v2 的判断记一条，不影响本轮任何真实动作。
+ * 跑一次卖出规则 v2。
+ *
+ * **一轮里只调用这一次，结果同时喂给真实平仓和影子记录**——两边必须是同一次判定，
+ * 各算各的话影子表和模拟盘流水就对不上，两组数字没法互相印证，并行期记录也就白记了。
+ */
+function evaluateSellDecision(summary: ISignalSummary): ISellV2Result {
+  return evaluateSellV2({
+    return24h: return24hOf(summary),
+    hourlyPrices: summary.recentPrices,
+  });
+}
+
+/**
+ * 把 v2 的判断记一条影子记录。**跟真实平仓用的是同一个 verdict**（由调用方传进来），
+ * 但两边记的对象不同，都要留着：影子记的是"每轮全部过 T+7 的仓位怎么判"，
+ * 模拟盘只记真实平仓那一下。
+ *
  * 失败不能影响模拟盘本身——这只是个观察记录，出问题宁可少一条数据也不能让平仓逻辑挂掉。
  */
-function recordShadowDecision(trade: IPaperTrade, summary: ISignalSummary): void {
+function recordShadowDecision(
+  trade: IPaperTrade,
+  summary: ISignalSummary,
+  verdict: ISellV2Result
+): void {
   try {
-    const verdict = evaluateSellV2({
-      // changeToday 是百分数，规则那边要的是小数
-      return24h: (summary.changeToday?.percent ?? 0) / 100,
-      hourlyPrices: summary.recentPrices,
-    });
-
     // 去重：模拟盘每小时一轮，同一个持续状态不去重的话一天记 24 条，
     // "触发次数"就没意义了（持续 5 小时的卖出信号是一次信号不是五次）。
     // 动作变了就记新的一条；动作没变则每天补记一条，这样长期 HOLD 也有连续性可查。
@@ -82,7 +101,7 @@ function recordShadowDecision(trade: IPaperTrade, summary: ISignalSummary): void
       action: verdict.action,
       reason: verdict.reason,
       price: summary.signals.price,
-      return_24h: (summary.changeToday?.percent ?? 0) / 100,
+      return_24h: return24hOf(summary),
       drawdown_48h: verdict.drawdown48h,
       decided_at: new Date().toISOString(),
     });
@@ -90,6 +109,13 @@ function recordShadowDecision(trade: IPaperTrade, summary: ISignalSummary): void
     console.error("[paper-trading] 影子规则记录失败（不影响模拟盘）：", err);
   }
 }
+
+// v2 的两档分别记成不同的 close_reason，不合并成一个 'signal'：回测里两档的超额差了
+// 一个数量级（>30% 档 -18.69%，15~30% 档 -4.35%~-5.89%），评估时必须能拆开看。
+const CLOSE_REASON_BY_ACTION: Record<string, PaperTradeCloseReason | undefined> = {
+  SELL_STRONG: "sell_rule_v2_strong",
+  SELL: "sell_rule_v2",
+};
 
 /**
  * 每小时价格同步后跑一遍模拟盘：观察池饰品买入信号达标就模拟开仓，
@@ -101,6 +127,15 @@ function recordShadowDecision(trade: IPaperTrade, summary: ISignalSummary): void
  * - 不模拟仓位大小，每笔都是"1 件"，收益率按单件算。
  */
 export function runPaperTradingTick(): IPaperTradingSummary {
+  // 止血开关：平仓判定换成 v2 之后如果发现平得太凶（或者别的什么不对），SSH 上去在
+  // .env.local 加一行 PAPER_TRADING_DISABLED=1 + `docker compose restart` 就能掐掉整个
+  // tick，几秒生效、不用 rebuild（做法同 C5_FAST_SYNC_DISABLED）。开仓和影子记录一起停，
+  // 因为要止的是"模拟盘继续往前跑"这件事本身，留一半反而让流水更难解释。
+  if (process.env.PAPER_TRADING_DISABLED === "1") {
+    console.log("[paper-trading] PAPER_TRADING_DISABLED=1，本轮跳过模拟盘");
+    return { opened: 0, closed: 0 };
+  }
+
   const now = Date.now();
   let opened = 0;
   let closed = 0;
@@ -138,23 +173,28 @@ export function runPaperTradingTick(): IPaperTradingSummary {
       continue;
     }
 
-    // 影子卖出规则（v2）并行记录。**只记不做**——真实平仓仍然完全由下面的 v1 决定。
-    // 现有 v1 卖出侧结构上永远触发不了（HANDOFF 踩坑 43），v2 的阈值是从回测反推的
-    // （lib/rules/sell-rule-v2.ts 文件头有完整依据表）。按项目所有者定的口径，替换之前
-    // 要先并行跑至少一轮拿到触发次数和假信号率，评估脚本是
-    // scripts/report-shadow-sell-signals.mjs。
-    recordShadowDecision(trade, summary);
+    // 模拟盘的平仓判定走卖出规则 v2（2026-08-03 起）。**注意这只改模拟账本**——
+    // /positions 页面上给人看的买卖建议仍然由 v1（lib/rules/evaluate.ts）出，一个字没动。
+    // 换成 v2 是因为 v1 卖出侧结构上永远触发不了（score ≤ -40 要超买+趋势走弱同时成立，
+    // 实测 325 个饰品 0 个），230 笔仓位注定全部走 30 天超时平仓，而 timeout 的含义是
+    // "持满 30 天按当时价卖掉"，对"卖出规则准不准"零信息量——模拟盘存在的意义就是验证
+    // 卖出规则，用一个永不触发的规则去验证等于什么都没验。v2 的阈值全部从回测反推
+    // （lib/rules/sell-rule-v2.ts 文件头有完整依据表）。
+    const verdict = evaluateSellDecision(summary);
+    recordShadowDecision(trade, summary, verdict);
 
-    const sellSignal = summary.rule.action === "SELL";
-    if (!sellSignal && !timedOut) continue;
+    const sellCloseReason = CLOSE_REASON_BY_ACTION[verdict.action];
+    if (!sellCloseReason && !timedOut) continue;
 
     closePaperTrade({
       id: trade.id,
       sell_price: summary.signals.price,
       sell_net_price: netSellPrice(summary.signals.price, SELL_FEE_KEY).net,
-      sell_score: summary.rule.score,
-      sell_reasons: summary.rule.reasons,
-      close_reason: sellSignal ? "sell_signal" : "timeout",
+      // v2 不产出 v1 那种 score。存 null 不存 0——0 会被误读成"算出来是中性分"
+      // （stale_data 那次已经踩过）。触发的是哪一档记在 close_reason 里。
+      sell_score: null,
+      sell_reasons: [verdict.reason],
+      close_reason: sellCloseReason ?? "timeout",
       closed_at: new Date(now).toISOString(),
     });
     closed += 1;

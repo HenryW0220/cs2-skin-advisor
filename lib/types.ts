@@ -143,7 +143,17 @@ export interface IPushSubscription {
 
 // 平仓原因。stale_data 是"数据中断后按最后已知价格强制平掉"，成交价不是决策当时的价，
 // 统计胜率时要单独剔出去，不能跟前两种正常平仓混在一起算（见 lib/paper-trading.ts）。
-export type PaperTradeCloseReason = "sell_signal" | "timeout" | "stale_data";
+// sell_rule_v2_strong / sell_rule_v2 = 卖出规则 v2 的强档（24h 涨幅 ≥30%）和普通档
+// （≥15%）。**两档必须分开记**：回测里两档的未来 7 天超额差了一个数量级
+// （-18.69% vs -4.35%~-5.89%），混成一个值就没法分别评估。
+// sell_signal 是 v1 时代的值，2026-08-03 起不再产生；库里也一条都没有（当时零平仓），
+// 保留在联合类型里只是为了将来真要拿 v1 做对照时不用改类型。
+export type PaperTradeCloseReason =
+  | "sell_rule_v2_strong"
+  | "sell_rule_v2"
+  | "sell_signal"
+  | "timeout"
+  | "stale_data";
 
 // 模拟盘记录，见 db/migrations/016_add_paper_trades.sql。
 export interface IPaperTrade {

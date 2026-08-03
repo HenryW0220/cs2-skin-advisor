@@ -249,9 +249,23 @@ export default function PaperTradingPage() {
                       </td>
                       <td className="px-4 py-3 text-center">{heldDays !== null ? `${heldDays} 天` : "—"}</td>
                       <td className="px-4 py-3 text-center">
-                        {t.close_reason === "sell_signal" ? (
-                          <span className="rounded bg-blue-500/15 px-2 py-0.5 text-xs text-blue-400">
+                        {t.close_reason === "sell_rule_v2_strong" ? (
+                          <span
+                            className="rounded bg-red-500/15 px-2 py-0.5 text-xs text-red-400"
+                            title="卖出规则 v2 强档：24h 涨幅 ≥30%，回测里这一档未来 7 天超额中位数 -18.69%"
+                          >
+                            强卖出
+                          </span>
+                        ) : t.close_reason === "sell_rule_v2" ? (
+                          <span
+                            className="rounded bg-blue-500/15 px-2 py-0.5 text-xs text-blue-400"
+                            title="卖出规则 v2 普通档：24h 涨幅 15~30%，回测里未来 7 天超额中位数 -4.35%~-5.89%"
+                          >
                             卖出信号
+                          </span>
+                        ) : t.close_reason === "sell_signal" ? (
+                          <span className="rounded bg-blue-500/15 px-2 py-0.5 text-xs text-blue-400">
+                            卖出信号（v1）
                           </span>
                         ) : t.close_reason === "stale_data" ? (
                           <span
