@@ -23,17 +23,12 @@ const MIN_SNAPSHOTS_PER_ITEM = 200;
 // build-sell-rule-baseline 原来没有这个下限：差别只出现在数据两端样本极少的那几天。
 const MIN_SAMPLES_PER_DAY = 20;
 
-// ⚠️ 改了上面任何一条口径（平台优先级、历史长度门槛、样本下限），
-// 已经存进 market_baseline_daily 的行**不会自动重算**（增量逻辑只补缺的天）。
-// 必须先 DELETE FROM market_baseline_daily 再重跑 builder，否则表里会混着两套口径的数字。
 // 收盘之后再等这么久才认为这一天的基准定型：同步偶尔错过整点，留一点余量
 const SETTLE_MS = 6 * HOUR_MS;
 
-const median = (a) => {
-  if (!a.length) return NaN;
-  const s = [...a].sort((x, y) => x - y);
-  return s[Math.floor(s.length / 2)];
-};
+// ⚠️ 改了上面任何一条口径（平台优先级、历史长度门槛、样本下限），
+// 已经存进 market_baseline_daily 的行**不会自动重算**（增量逻辑只补缺的天）。
+// 必须先 DELETE FROM market_baseline_daily 再重跑 builder，否则表里会混着两套口径的数字。
 
 function referencePlatform(db, itemName) {
   const rows = db
@@ -87,18 +82,37 @@ export function ensureBaselines(db, horizons, { verbose = false } = {}) {
 
   const existing = new Map(pending.map((h) => [h, storedDays(db, h)]));
   const cutoff = Date.now();
-  const buckets = new Map(); // `${horizon}|${day}` -> {rets:[], items:Set}
+
+  // 样本落到一张临时表里再让 SQLite 排序求中位数，**不在内存里攒**。
+  // 这台机器是 1 核 1GB：第一版把所有 (天, 窗口) 的收益数组全揣在 JS 里，跑了 25 分钟
+  // 还没写出一行，`top` 里 kswapd0 一直在 D 状态——是在swap上打转，不是在算。
+  // 排序交给 SQLite 之后内存占用跟样本数无关（踩坑 28 是同一台机器上的同一类问题）。
+  db.exec(`
+    DROP TABLE IF EXISTS _baseline_samples;
+    CREATE TEMP TABLE _baseline_samples (horizon INTEGER, day TEXT, item TEXT, ret REAL);
+  `);
+  const insertSample = db.prepare(
+    "INSERT INTO _baseline_samples (horizon, day, item, ret) VALUES (?, ?, ?, ?)"
+  );
+  // **必须按饰品打包成一个事务**：better-sqlite3 的裸 INSERT 每条都是一个隐式事务，
+  // 一个饰品两千多条样本 × 七百个饰品 = 一百多万次事务提交，实测慢到跑不完。
+  // 一个饰品一次提交（几千条）在这台 1 核机器上是几十毫秒的事。
+  const insertItemSamples = db.transaction((rows) => {
+    for (const r of rows) insertSample.run(r[0], r[1], r[2], r[3]);
+  });
 
   const items = db
     .prepare("SELECT DISTINCT item_name FROM price_snapshots")
     .all()
     .map((r) => r.item_name);
 
+  let processed = 0;
   for (const item of items) {
     const platform = referencePlatform(db, item);
     if (!platform) continue;
     const series = hourlyPrices(db, item, platform);
     const hourIndex = new Map(series.map(([h], i) => [h, i]));
+    const samples = [];
     for (const horizon of pending) {
       // 历史长度门槛跟 build-sell-rule-baseline.mjs 完全一致（24 × (窗口 + 14) 小时）。
       // **这条必须对齐**：v2 的全部阈值是从那个脚本反推的，参与基准的饰品集合一变，
@@ -117,15 +131,14 @@ export function ensureBaselines(db, horizons, { verbose = false } = {}) {
         const fwd = (series[futureIdx][1] - price) / price;
         if (!Number.isFinite(fwd)) continue;
 
-        const key = `${horizon}|${day}`;
-        let bucket = buckets.get(key);
-        if (!bucket) {
-          bucket = { rets: [], items: new Set() };
-          buckets.set(key, bucket);
-        }
-        bucket.rets.push(fwd);
-        bucket.items.add(item);
+        samples.push([horizon, day, item, fwd]);
       }
+    }
+    if (samples.length) insertItemSamples(samples);
+
+    processed += 1;
+    if (verbose && processed % 100 === 0) {
+      console.log(`[market-baseline] 已扫 ${processed}/${items.length} 个饰品`);
     }
   }
 
@@ -139,17 +152,37 @@ export function ensureBaselines(db, horizons, { verbose = false } = {}) {
        computed_at = datetime('now')`
   );
 
+  // 中位数交给 SQLite 算：按 (窗口, 天) 分组排序，取中间那一条（偶数条时取中间两条的均值，
+  // 跟 JS 版 `s[Math.floor(len/2)]` 的差别只在偶数样本上，对 20 条起步的分组可以忽略）。
+  const aggregated = db
+    .prepare(
+      `WITH ranked AS (
+         SELECT horizon, day, ret,
+                ROW_NUMBER() OVER (PARTITION BY horizon, day ORDER BY ret) rn,
+                COUNT(*) OVER (PARTITION BY horizon, day) cnt
+         FROM _baseline_samples
+       ),
+       med AS (
+         SELECT horizon, day, AVG(ret) median_return, MAX(cnt) sample_count
+         FROM ranked WHERE rn IN ((cnt + 1) / 2, (cnt + 2) / 2)
+         GROUP BY horizon, day
+       )
+       SELECT m.horizon, m.day, m.median_return, m.sample_count,
+              (SELECT COUNT(DISTINCT s.item) FROM _baseline_samples s
+                WHERE s.horizon = m.horizon AND s.day = m.day) item_count
+       FROM med m WHERE m.sample_count >= ?`
+    )
+    .all(MIN_SAMPLES_PER_DAY);
+
   const written = {};
-  const writeAll = db.transaction((entries) => {
-    for (const [key, bucket] of entries) {
-      if (bucket.rets.length < MIN_SAMPLES_PER_DAY) continue;
-      const [horizonRaw, day] = key.split("|");
-      const horizon = Number(horizonRaw);
-      insert.run(day, horizon, median(bucket.rets), bucket.rets.length, bucket.items.size);
-      written[horizon] = (written[horizon] ?? 0) + 1;
+  const writeAll = db.transaction((rows) => {
+    for (const r of rows) {
+      insert.run(r.day, r.horizon, r.median_return, r.sample_count, r.item_count);
+      written[r.horizon] = (written[r.horizon] ?? 0) + 1;
     }
   });
-  writeAll([...buckets.entries()]);
+  writeAll(aggregated);
+  db.exec("DROP TABLE IF EXISTS _baseline_samples");
 
   if (verbose) {
     for (const horizon of pending) {
