@@ -31,6 +31,7 @@
 // 比的是"此刻卖"vs"继续持有 N 天"的毛收益，两边都要扣一次手续费、差额上抵消。
 // 按小时重采样，跟 lib/signals/resample.ts 同口径。
 import Database from "better-sqlite3";
+import { assertBaselineTable, loadBaseline } from "./market-baseline-store.mjs";
 
 const db = new Database("data/db.sqlite", { readonly: true });
 const HOUR_MS = 36e5;
@@ -88,7 +89,6 @@ const bandOf = (r) => BANDS.find(([, lo, hi]) => r >= lo && r < hi)?.[0] ?? null
 // ---------- 第一遍：算每个 (饰品,小时) 的前瞻收益，并按天汇总出大盘基准 ----------
 const items = db.prepare("SELECT DISTINCT item_name FROM price_snapshots").all().map((r) => r.item_name);
 const perItemSamples = new Map(); // item -> [{day, band, fwd, inWashout}]
-const fwdByDay = new Map(); // 当天所有饰品的前瞻收益，用来算大盘基准中位数
 
 let itemsUsed = 0;
 for (const item of items) {
@@ -117,15 +117,21 @@ for (const item of items) {
 
     const day = Math.floor(ts / DAY_MS) * DAY_MS;
     samples.push({ day, band, fwd, inWashout });
-    if (!fwdByDay.has(day)) fwdByDay.set(day, []);
-    fwdByDay.get(day).push(fwd);
   }
   if (samples.length) perItemSamples.set(item, samples);
 }
 
-// 大盘基准：当天全部饰品未来 7 天收益的中位数（按天而不是按小时，是为了内存——
-// 1 核 1GB 的机器上按小时存要多 24 倍的数组，而大盘走势在一天之内没那么大变化）
-const marketByDay = new Map([...fwdByDay.entries()].map(([d, arr]) => [d, median(arr)]));
+// 大盘基准改读物化表（迁移 023 + scripts/build-market-baseline.mjs）。
+// 口径没变——物化表用的就是这里原来那套（按饰品取参考平台、按小时重采样、当天所有
+// 小时样本取中位数，历史长度门槛同样是 24×(窗口+14) 小时），只是算一次存起来，
+// 另外两个评估脚本共用同一份，不必各算各的。
+assertBaselineTable(db);
+const baselineRows = loadBaseline(db, HORIZON_DAYS);
+if (baselineRows.size === 0) {
+  console.log("market_baseline_daily 里还没有基准，先跑：node scripts/build-market-baseline.mjs");
+  process.exit(0);
+}
+const marketByDay = new Map([...baselineRows.entries()].map(([day, v]) => [day, v.median]));
 
 // ---------- 第二遍：按档位汇总超额收益 ----------
 const agg = new Map(); // band -> {all:[], washout:[], noWashout:[]}
