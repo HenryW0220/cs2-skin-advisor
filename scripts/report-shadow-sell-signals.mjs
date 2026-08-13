@@ -23,8 +23,9 @@
 // 命中率本身仍然有效：它查的是 decided_at 之后 7 天的实际走势，跟仓位平没平无关。
 // 想看平仓侧的收益，用 scripts/report-paper-trades.mjs——两边是同一次 v2 判定。
 import Database from "better-sqlite3";
+import { assertBaselineTable, loadBaseline } from "./market-baseline-store.mjs";
 
-const db = new Database("data/db.sqlite", { readonly: true });
+const db = new Database(process.env.CS2_DB_PATH ?? "data/db.sqlite", { readonly: true });
 const HOUR_MS = 36e5;
 const DAY_MS = 24 * HOUR_MS;
 const HORIZON_DAYS = 7;
@@ -73,39 +74,33 @@ function forwardReturn(signal) {
   return (row.price - signal.price) / signal.price;
 }
 
-// 大盘基准：当天全部饰品未来 7 天收益的中位数（口径跟 build-sell-rule-baseline.mjs 一致）
+// 大盘基准改读物化表（迁移 023 + scripts/build-market-baseline.mjs）。
+// 原来这里是每天一条相关子查询现场算，在生产库（270 万行快照）上跑不完；而基准只跟
+// (日期, 窗口) 有关、跟脚本无关，三个评估脚本共用一份就行。**口径也因此统一到
+// build-sell-rule-baseline.mjs 那一套**（按小时样本），跟这里原来"每个饰品每天取一条"
+// 的近似口径会有小幅差异，以物化表为准。
+assertBaselineTable(db);
+const baselineByDay = loadBaseline(db, HORIZON_DAYS);
+if (baselineByDay.size === 0) {
+  console.log("market_baseline_daily 里还没有 7 天窗口的基准，先跑：node scripts/build-market-baseline.mjs");
+  process.exit(0);
+}
+
 const median = (a) => {
   if (!a.length) return NaN;
   const s = [...a].sort((x, y) => x - y);
   return s[Math.floor(s.length / 2)];
 };
 
-const marketCache = new Map();
+let missingBaselineDays = 0;
 function marketBaseline(decidedAt) {
   const day = Math.floor(Date.parse(decidedAt) / DAY_MS) * DAY_MS;
-  if (marketCache.has(day)) return marketCache.get(day);
-  const rows = db
-    .prepare(
-      `SELECT a.item_name, a.platform, a.price p0, (
-         SELECT b.price FROM price_snapshots b
-         WHERE b.item_name = a.item_name AND b.platform = a.platform AND b.price > 0
-           AND b.captured_at >= ? AND b.captured_at < ?
-         ORDER BY b.captured_at ASC LIMIT 1
-       ) p1
-       FROM price_snapshots a
-       WHERE a.captured_at >= ? AND a.captured_at < ? AND a.price > 0
-       GROUP BY a.item_name, a.platform`
-    )
-    .all(
-      new Date(day + HORIZON_DAYS * DAY_MS).toISOString(),
-      new Date(day + HORIZON_DAYS * DAY_MS + 6 * HOUR_MS).toISOString(),
-      new Date(day).toISOString(),
-      new Date(day + DAY_MS).toISOString()
-    );
-  const rets = rows.filter((r) => r.p1 > 0 && r.p0 > 0).map((r) => (r.p1 - r.p0) / r.p0);
-  const value = rets.length >= 20 ? median(rets) : null; // 样本太少的基准不可信，宁可不算
-  marketCache.set(day, value);
-  return value;
+  const hit = baselineByDay.get(day);
+  if (!hit) {
+    missingBaselineDays += 1;
+    return null;
+  }
+  return hit.median;
 }
 
 let pending = 0;
@@ -123,6 +118,12 @@ for (const s of signals) {
 console.log("");
 console.log("=== 命中率（未到期或缺对照基准的样本已剔除）===");
 console.log(`未到期/无法评估：${pending} 条`);
+if (missingBaselineDays > 0) {
+  console.log(
+    `其中 ${missingBaselineDays} 条是**当天没有大盘基准**（物化表里缺这一天）——` +
+      `补一下再看：node scripts/build-market-baseline.mjs`
+  );
+}
 console.log("");
 console.log("动作         | 可评估 | 超额中位数 | 判对的 | 命中率");
 console.log("-------------|-------|-----------|-------|-------");
