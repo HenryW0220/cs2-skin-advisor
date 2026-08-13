@@ -4,21 +4,24 @@ import { AiInsight } from "@/components/features/ai-insight";
 import { RefreshPricesButton } from "@/components/features/refresh-prices-button";
 import { RemoveWatchlistButton } from "@/components/features/remove-watchlist-button";
 import { WatchlistSearchBox } from "@/components/features/watchlist-search-box";
+import { CostLineNote } from "@/components/ui/cost-line-note";
 import { Sparkline } from "@/components/ui/sparkline";
 import { STEAM_ICON_BASE_URL } from "@/lib/api/steam";
 import { listWatchlist } from "@/lib/db/watchlist";
 import { listSignalSummaries } from "@/lib/db/signal-summaries";
 
-// score 的分段是经验值，跟 lib/rules/evaluate.ts 里 SELL/TRIM 的阈值是对称设计的：
-// >=30 大致对应"明显超卖/趋势走强"，<0 大致对应"超买/趋势走弱"，中间是中性。
+// 2026-08-13 改文案：删掉趋势项之后 score 只由 RSI 单因子决定，而 RSI 两档的回测超额
+// （超卖 +0.61%、超买 −0.96%）都够不着 6.7%~12% 的往返成本。原来 score≥30 写的是
+// "较好的买入时机"——那是在用界面文案把一个证伪过的信号讲成机会，跟 LLM 那边要防的是
+// 同一件事。现在只陈述状态，够不够得着成本线由 CostLineNote 说。
 function buyTimingLabel(score: number): { text: string; className: string } {
   if (score >= 30) {
-    return { text: "较好的买入时机", className: "bg-emerald-500/15 text-emerald-400" };
+    return { text: "RSI 超卖", className: "bg-neutral-500/15 text-neutral-300" };
   }
   if (score >= 0) {
-    return { text: "可以观察，还不是最佳时机", className: "bg-neutral-500/15 text-neutral-300" };
+    return { text: "无信号", className: "bg-neutral-500/15 text-neutral-400" };
   }
-  return { text: "偏强势/超买，不建议现在买", className: "bg-red-500/15 text-red-400" };
+  return { text: "RSI 超买", className: "bg-red-500/15 text-red-400" };
 }
 
 function pnlColor(value: number): string {
@@ -257,9 +260,12 @@ export default async function WatchlistPage({
                   </td>
                   <td className="px-4 py-3 text-center">
                     {timing ? (
-                      <span className={`rounded px-2 py-1 text-xs ${timing.className}`}>
-                        {timing.text}
-                      </span>
+                      <>
+                        <span className={`rounded px-2 py-1 text-xs ${timing.className}`}>
+                          {timing.text}
+                        </span>
+                        <CostLineNote score={row.score} />
+                      </>
                     ) : (
                       <span className="text-xs text-neutral-500">暂无信号</span>
                     )}

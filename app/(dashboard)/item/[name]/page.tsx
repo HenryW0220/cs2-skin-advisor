@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { AiInsight } from "@/components/features/ai-insight";
 import { PriceChart, type IPriceChartPoint } from "@/components/features/price-chart";
+import { CostLineNote } from "@/components/ui/cost-line-note";
 import { STEAM_ICON_BASE_URL } from "@/lib/api/steam";
 import { findInventoryItemsByName } from "@/lib/db/inventory";
 import { getItemMetadata } from "@/lib/db/item-metadata";
@@ -180,21 +181,27 @@ export default async function ItemDetailPage({
       </div>
 
       {summary && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-neutral-800 bg-neutral-900 px-5 py-4">
-          <span className={`rounded px-2.5 py-1 text-sm ${ACTION_STYLE[summary.rule.action]}`}>
-            {ACTION_LABEL[summary.rule.action]}
-          </span>
-          <span className="text-sm text-neutral-400" style={{ fontVariantNumeric: "tabular-nums" }}>
-            信号分 {summary.rule.score}
-          </span>
-          {summary.rule.reasons.length > 0 && (
-            <span className="text-sm text-neutral-500">{summary.rule.reasons.join("；")}</span>
-          )}
-          {platform && (
-            <span className="ml-auto">
-              <AiInsight itemName={itemName} platform={platform} holding={holding} />
+        <div className="space-y-2 rounded-lg border border-neutral-800 bg-neutral-900 px-5 py-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className={`rounded px-2.5 py-1 text-sm ${ACTION_STYLE[summary.rule.action]}`}>
+              {ACTION_LABEL[summary.rule.action]}
             </span>
-          )}
+            <span
+              className="text-sm text-neutral-400"
+              style={{ fontVariantNumeric: "tabular-nums" }}
+            >
+              信号分 {summary.rule.score}
+            </span>
+            {summary.rule.reasons.length > 0 && (
+              <span className="text-sm text-neutral-500">{summary.rule.reasons.join("；")}</span>
+            )}
+            {platform && (
+              <span className="ml-auto">
+                <AiInsight itemName={itemName} platform={platform} holding={holding} />
+              </span>
+            )}
+          </div>
+          <CostLineNote score={summary.rule.score} variant="full" />
         </div>
       )}
 

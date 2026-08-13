@@ -4,6 +4,7 @@ import { BackfillAnomalyScanButton } from "@/components/features/backfill-anomal
 import { BackfillKlineButton } from "@/components/features/backfill-kline-button";
 import { EditableBuyPrice } from "@/components/features/editable-buy-price";
 import { RefreshInventoryButton } from "@/components/features/refresh-inventory-button";
+import { CostLineNote } from "@/components/ui/cost-line-note";
 import { Sparkline } from "@/components/ui/sparkline";
 import { STEAM_ICON_BASE_URL } from "@/lib/api/steam";
 import { listInventory } from "@/lib/db/inventory";
@@ -74,6 +75,7 @@ interface IPositionRow {
   marketPrice: number | null;
   platform: string | null;
   action: ITradeAction | null;
+  score: number | null; // 给成本线标注用（CostLineNote 按 score 反推触发档）
   pnl: number | null;
   pnlPercent: number | null;
   changeTodayPercent: number | null;
@@ -131,6 +133,7 @@ function mergeByItemName(rows: IPositionRow[]): IPositionRow[] {
       marketPrice,
       platform: group[0].platform,
       action: group[0].action,
+      score: group[0].score,
       pnl,
       pnlPercent: pnl !== null && knownCost > 0 ? (pnl / knownCost) * 100 : null,
       changeTodayPercent: group[0].changeTodayPercent,
@@ -181,6 +184,7 @@ export default async function PositionsPage({
       marketPrice,
       platform: summary?.platform ?? null,
       action: summary?.action ?? null,
+      score: summary?.score ?? null,
       pnl,
       pnlPercent,
       changeTodayPercent: summary?.change_today_percent ?? null,
@@ -429,9 +433,12 @@ export default async function PositionsPage({
                   </td>
                   <td className="px-4 py-3 text-center">
                     {row.action ? (
-                      <span className={`rounded px-2 py-1 text-xs ${ACTION_STYLE[row.action]}`}>
-                        {ACTION_LABEL[row.action]}
-                      </span>
+                      <>
+                        <span className={`rounded px-2 py-1 text-xs ${ACTION_STYLE[row.action]}`}>
+                          {ACTION_LABEL[row.action]}
+                        </span>
+                        <CostLineNote score={row.score} />
+                      </>
                     ) : (
                       <span className="text-xs text-neutral-500">暂无信号</span>
                     )}
