@@ -65,22 +65,33 @@ export async function generateTradeReason(input: {
   action: string;
   score: number;
   reasons: string[];
+  /** 触发档的历史超额和成本线结论，由 lib/rules/cost-line.ts 生成，见下面 systemPrompt 的解释 */
+  evidence?: string[];
   recentPrices?: number[];
   changeTodayPercent?: number | null;
 }): Promise<ILlmResult> {
   // 这里只是让 LLM 用人话描述"近期走势看起来怎样、什么时候买卖更合适"，
   // 本质还是基于规则引擎已经算出来的 score/reasons 做转述和外推，不是独立的预测模型。
+  //
+  // **"不可行动"那段是硬约束，不是修辞**：规则引擎剩下的 RSI 两档回测超额只有零点几个
+  // 百分点，而一次往返成本 6.7%~12%。不把这件事塞给模型的话，"RSI 超卖"喂进去，出来的
+  // 中文几乎必然是"超卖，存在反弹机会"——那是在用自然语言把一个证伪过的信号讲成机会。
   const systemPrompt =
     "你是 CS2 饰品交易顾问。根据给定的技术指标信号和近期价格走势，用简洁的中文做两件事：" +
     "1）说明当前操作建议的理由；2）判断近期走势可能怎么走，给一个买入或卖出时间窗口的建议" +
     "（比如「短期均线走弱，可以等价格再回落一些再考虑」）。" +
-    "不超过 4 句话，不要逐字重复输入的数值，不要用免责声明式的套话。";
+    "不超过 4 句话，不要逐字重复输入的数值，不要用免责声明式的套话。" +
+    "如果输入里标注了某个信号「低于往返成本、不可行动」，你必须照实说它不值得为此换手，" +
+    "不许把它描述成买入或卖出机会，也不许用「可以关注」「或有反弹」这类话把它讲回机会。";
 
   const userPrompt = [
     `饰品：${input.itemName}`,
     `建议操作：${input.action}`,
     `信号强度 score：${input.score}`,
     `触发的信号：${input.reasons.join("；") || "无明显信号"}`,
+    input.evidence && input.evidence.length > 0
+      ? `这些信号的历史成绩（回测实测，必须照实转述）：${input.evidence.join("；")}`
+      : null,
     input.changeTodayPercent != null ? `今日涨跌：${input.changeTodayPercent.toFixed(2)}%` : null,
     input.recentPrices && input.recentPrices.length > 1
       ? `近7天价格序列（按时间从早到晚）：${input.recentPrices.map((p) => p.toFixed(2)).join(", ")}`

@@ -1,11 +1,17 @@
 import { generateTradeReason } from "./api/nvidia-llm";
 import { getCachedReason, setCachedReason } from "./db/reason-cache";
+import { SIGNAL_EVIDENCE, describeEvidence } from "./rules/cost-line";
 import type { IRuleResult } from "./rules/evaluate";
+
+// 提示词口径变了就要跟着改这个版本号，否则同一天里旧口径的缓存文案会继续被读出来。
+// score 变了 key 自然会变，但"RSI 单独触发"这类 score 没变、只是**说法**变了的情况
+// 光靠 score 是挡不住的——2026-08-13 加"不可行动"标注就是这种情况。
+const PROMPT_VERSION = "cost-line-v1";
 
 function buildCacheKey(itemName: string, action: string, score: number): string {
   const roundedScore = Math.round(score / 5) * 5; // score 小幅波动不重新生成理由
   const today = new Date().toISOString().slice(0, 10); // 每天自然过期一次
-  return `${itemName}:${action}:${roundedScore}:${today}`;
+  return `${itemName}:${action}:${roundedScore}:${PROMPT_VERSION}:${today}`;
 }
 
 export interface IReasonResult {
@@ -19,7 +25,7 @@ export interface IReasonResult {
 // （同一天内价格会变但叙述粒度按天就够了，没必要为了价格波动重新调用）。
 export async function getOrGenerateReason(
   itemName: string,
-  rule: Pick<IRuleResult, "action" | "score" | "reasons">,
+  rule: Pick<IRuleResult, "action" | "score" | "reasons"> & Partial<Pick<IRuleResult, "signalKeys">>,
   trend?: { recentPrices: number[]; changeTodayPercent: number | null }
 ): Promise<IReasonResult> {
   const cacheKey = buildCacheKey(itemName, rule.action, rule.score);
@@ -33,6 +39,7 @@ export async function getOrGenerateReason(
     action: rule.action,
     score: rule.score,
     reasons: rule.reasons,
+    evidence: (rule.signalKeys ?? []).map((key) => describeEvidence(SIGNAL_EVIDENCE[key])),
     recentPrices: trend?.recentPrices,
     changeTodayPercent: trend?.changeTodayPercent,
   });
