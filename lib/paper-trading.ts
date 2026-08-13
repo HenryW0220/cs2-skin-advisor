@@ -13,9 +13,26 @@ import { evaluateSellV2, type ISellV2Result } from "./rules/sell-rule-v2";
 import { computeSignalSummary, pickReferencePlatform, type ISignalSummary } from "./signal-summary";
 import type { IPaperTrade, PaperTradeCloseReason } from "./types";
 
-// 开仓门槛：规则引擎买入侧 score ≥ 30，等于至少 RSI 超卖（+30）这个量级的信号——
-// 纯"趋势走强"只有 +15，作为买入依据太弱，会把模拟盘灌满噪声交易。
+// **模拟盘的开仓阈值是采样率参数，不是策略参数**——它不代表任何买入建议。
+//
+// 这句话必须写在这里，因为它跟直觉相反：2026-08-13 回算证明 v1 买入侧走的那一档
+// （RSI<30 → +30 → 达到这个门槛）未来 7 天超额中位只有 +0.61%（小时）/+0.37%（日），
+// 而一次往返成本 6.7%~12%——**按它开的仓是已知负 EV 的**。既然如此为什么不关掉？
+// 因为这个代价是模拟的，而它换来的东西是真的：卖出侧验证需要有仓位可平，没有仓位
+// 就没有平仓样本，v2 卖出规则就永远验证不完（模拟盘存在的唯一理由就是这个）。
+//
+// 删掉趋势项之后可达 score 只剩 {−30, 0, +30}，所以提到 40 等于永不开仓、存量仓位
+// 平完之后卖出侧验证直接断粮——那才是真损失。维持 30 也不会"放开闸门"：实测 269 笔
+// open 对应 269 个不同饰品（一品一笔），跟踪总量 325，位置本来就接近饱和；
+// 预览显示删趋势项后真正新增开仓只有 9 个饰品。
+//
+// 证据分布：现有仓位 buy_score 只有两种，30 分 262 笔、40 分 17 笔——全靠 RSI 单因子。
 const ENTRY_MIN_SCORE = 30;
+
+// 买入规则版本，跟着仓位一起存（db/migrations/022）。'v1' = 含均线趋势项的旧规则，
+// 'v2' = 2026-08-13 删掉趋势项之后的 RSI 单因子。不存这个的话，8-13 之后的平仓样本
+// 是两套买入规则的混合，算卖出侧胜率时拆不开。
+const ENTRY_RULE_VERSION = "v2";
 
 // 几分钱的印花价格本身就是一分两分地跳，模拟收益全是价格粒度的机械结果，挡在入口。
 // 出发点和 lib/anomaly-scan.ts 的 MIN_PRICE_FOR_ANOMALY_SCAN 一样，但**数值不同且是有意的**：
@@ -224,6 +241,7 @@ export function runPaperTradingTick(): IPaperTradingSummary {
       buy_score: summary.rule.score,
       buy_reasons: summary.rule.reasons,
       opened_at: new Date(now).toISOString(),
+      entry_rule_version: ENTRY_RULE_VERSION,
     });
     opened += 1;
   }

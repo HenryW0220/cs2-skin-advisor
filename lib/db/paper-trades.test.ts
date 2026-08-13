@@ -30,6 +30,7 @@ describe("db/paper-trades", () => {
       buy_score: 30,
       buy_reasons: ["RSI 超卖"],
       opened_at: "2026-07-01T00:00:00.000Z",
+      entry_rule_version: "v2",
     });
 
     const [trade] = listPaperTrades();
@@ -50,6 +51,7 @@ describe("db/paper-trades", () => {
       buy_score: 30,
       buy_reasons: [],
       opened_at: "2026-07-01T00:00:00.000Z",
+      entry_rule_version: "v2",
     });
     expect(hasOpenPaperTrade("AK-47 | Redline")).toBe(true);
 
@@ -75,6 +77,7 @@ describe("db/paper-trades", () => {
       buy_score: 30,
       buy_reasons: [],
       opened_at: "2026-07-01T00:00:00.000Z",
+      entry_rule_version: "v2",
     });
     openPaperTrade({
       item_name: "B",
@@ -83,6 +86,7 @@ describe("db/paper-trades", () => {
       buy_score: 30,
       buy_reasons: [],
       opened_at: "2026-07-02T00:00:00.000Z",
+      entry_rule_version: "v2",
     });
     // 按 opened_at 降序排列，B 后开仓排在前面
     const [tradeB] = listOpenPaperTrades();
@@ -107,6 +111,7 @@ describe("db/paper-trades", () => {
       buy_score: 30,
       buy_reasons: [],
       opened_at: "2026-07-01T00:00:00.000Z",
+      entry_rule_version: "v2",
     });
     const [trade] = listOpenPaperTrades();
     closePaperTrade({
@@ -145,6 +150,7 @@ describe("db/paper-trades", () => {
       buy_score: 30,
       buy_reasons: [],
       opened_at: "2026-06-01T00:00:00.000Z",
+      entry_rule_version: "v2",
     });
     let [trade] = listOpenPaperTrades();
     closePaperTrade({
@@ -164,6 +170,7 @@ describe("db/paper-trades", () => {
       buy_score: 30,
       buy_reasons: [],
       opened_at: "2026-07-01T00:00:00.000Z",
+      entry_rule_version: "v2",
     });
     [trade] = listOpenPaperTrades();
     closePaperTrade({

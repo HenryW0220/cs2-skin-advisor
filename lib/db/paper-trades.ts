@@ -38,11 +38,14 @@ export function openPaperTrade(input: {
   buy_score: number;
   buy_reasons: string[];
   opened_at: string;
+  /** 开仓时的买入规则版本，见 db/migrations/022——不存的话新旧规则的仓位混在一起拆不开 */
+  entry_rule_version: string;
 }): void {
   getDb()
     .prepare(
-      `INSERT INTO paper_trades (item_name, platform, buy_price, buy_score, buy_reasons, opened_at)
-       VALUES (@item_name, @platform, @buy_price, @buy_score, @buy_reasons, @opened_at)`
+      `INSERT INTO paper_trades
+         (item_name, platform, buy_price, buy_score, buy_reasons, opened_at, entry_rule_version)
+       VALUES (@item_name, @platform, @buy_price, @buy_score, @buy_reasons, @opened_at, @entry_rule_version)`
     )
     .run({ ...input, buy_reasons: JSON.stringify(input.buy_reasons) });
 }

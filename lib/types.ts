@@ -164,6 +164,9 @@ export interface IPaperTrade {
   buy_score: number;
   buy_reasons: string; // JSON 数组字符串，展示时 JSON.parse
   opened_at: string;
+  // 开仓时的买入规则版本（db/migrations/022）：'v1' 含均线趋势项，'v2' 是删掉之后的 RSI 单因子。
+  // 8-13 之前的仓位全是 v1，混在一起算卖出侧胜率会把两套买入规则的结果搅在一块。
+  entry_rule_version: string;
   status: "open" | "closed";
   sell_price: number | null;
   sell_net_price: number | null;
