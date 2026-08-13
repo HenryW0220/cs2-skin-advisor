@@ -1,4 +1,5 @@
 import webpush from "web-push";
+import { recordSubscriptionDropped, setHealthSignal } from "../db/health-signals";
 import { listPushSubscriptions, removePushSubscription } from "../db/push-subscriptions";
 
 // 不带 NEXT_PUBLIC_ 前缀是有意的：带前缀的变量会在 next build 时被内联成常量，
@@ -42,6 +43,9 @@ export async function sendPushNotification(payload: IPushNotificationPayload): P
   const subscriptions = listPushSubscriptions();
   let sent = 0;
   let failed = 0;
+  let remaining = subscriptions.length;
+
+  setHealthSignal("last_push_attempt_at", new Date().toISOString());
 
   for (const sub of subscriptions) {
     try {
@@ -57,9 +61,17 @@ export async function sendPushNotification(payload: IPushNotificationPayload): P
       failed += 1;
       const statusCode = (err as { statusCode?: number }).statusCode;
       if (statusCode === 404 || statusCode === 410) {
+        // 删之前先留痕：订阅行删掉之后就再也看不出"曾经有过、什么时候没的"了，
+        // 2026-08 那次归零只能靠逐日翻数据库备份复原（见 db/migrations/021）。
+        remaining -= 1;
+        recordSubscriptionDropped(sub.endpoint, remaining);
         removePushSubscription(sub.endpoint);
       }
     }
+  }
+
+  if (sent > 0) {
+    setHealthSignal("last_push_success_at", new Date().toISOString());
   }
 
   return { data: { sent, failed } };
