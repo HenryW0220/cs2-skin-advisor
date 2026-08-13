@@ -18,8 +18,14 @@ export const HOUR_MS = 60 * 60 * 1000;
 // 参考平台优先级跟 lib/signal-summary.ts 一致
 const PLATFORM_PRIORITY = ["C5", "BUFF", "YOUPIN"];
 const MIN_SNAPSHOTS_PER_ITEM = 200;
-// 一天的基准至少要这么多样本才算数——太少的中位数不可信，宁可这一天没有基准
+// 一天的基准至少要这么多样本才算数——太少的中位数不可信，宁可这一天没有基准。
+// 这条是从 report-shadow-sell-signals / report-paper-trades 那边继承来的，
+// build-sell-rule-baseline 原来没有这个下限：差别只出现在数据两端样本极少的那几天。
 const MIN_SAMPLES_PER_DAY = 20;
+
+// ⚠️ 改了上面任何一条口径（平台优先级、历史长度门槛、样本下限），
+// 已经存进 market_baseline_daily 的行**不会自动重算**（增量逻辑只补缺的天）。
+// 必须先 DELETE FROM market_baseline_daily 再重跑 builder，否则表里会混着两套口径的数字。
 // 收盘之后再等这么久才认为这一天的基准定型：同步偶尔错过整点，留一点余量
 const SETTLE_MS = 6 * HOUR_MS;
 
@@ -92,10 +98,12 @@ export function ensureBaselines(db, horizons, { verbose = false } = {}) {
     const platform = referencePlatform(db, item);
     if (!platform) continue;
     const series = hourlyPrices(db, item, platform);
-    if (series.length < 24 * 8) continue; // 连一周多一点都没有的，算不出前瞻收益
-
     const hourIndex = new Map(series.map(([h], i) => [h, i]));
     for (const horizon of pending) {
+      // 历史长度门槛跟 build-sell-rule-baseline.mjs 完全一致（24 × (窗口 + 14) 小时）。
+      // **这条必须对齐**：v2 的全部阈值是从那个脚本反推的，参与基准的饰品集合一变，
+      // 基准就变、超额就变，那些阈值的依据也就跟着漂了。
+      if (series.length < 24 * (horizon + 14)) continue;
       const done = existing.get(horizon);
       for (let i = 0; i < series.length; i++) {
         const [ts, price] = series[i];
