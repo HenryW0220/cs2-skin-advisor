@@ -19,7 +19,13 @@
 import Database from "better-sqlite3";
 import { assertBaselineTable, ensureBaselines } from "./market-baseline-store.mjs";
 
-const args = process.argv.slice(2).map(Number).filter((n) => Number.isFinite(n) && n > 0);
+const argv = process.argv.slice(2);
+const throttleIdx = argv.indexOf("--throttle-ms");
+const throttleMs = throttleIdx >= 0 ? Number(argv[throttleIdx + 1]) || 0 : 0;
+const args = argv
+  .filter((a, i) => i !== throttleIdx && i !== throttleIdx + 1)
+  .map(Number)
+  .filter((n) => Number.isFinite(n) && n > 0);
 const horizons = args.length ? args : [7];
 
 const db = new Database(process.env.CS2_DB_PATH ?? "data/db.sqlite");
@@ -27,7 +33,8 @@ assertBaselineTable(db);
 
 const startedAt = Date.now();
 console.log(`窗口：${horizons.join(", ")} 天`);
-const written = ensureBaselines(db, horizons, { verbose: true });
+if (throttleMs) console.log(`每个饰品之间让路 ${throttleMs}ms，给采集器留磁盘`);
+const written = ensureBaselines(db, horizons, { verbose: true, throttleMs });
 
 for (const horizon of horizons) {
   const row = db

@@ -30,6 +30,14 @@ const SETTLE_MS = 6 * HOUR_MS;
 // 已经存进 market_baseline_daily 的行**不会自动重算**（增量逻辑只补缺的天）。
 // 必须先 DELETE FROM market_baseline_daily 再重跑 builder，否则表里会混着两套口径的数字。
 
+// 真正的同步 sleep。**不能用忙等**——这台机器只有一个核，忙等是把"占着磁盘"换成
+// "占着 CPU"，采集器一样跑不动。better-sqlite3 是全同步 API，改 async 会波及三个调用方，
+// 所以用 Atomics.wait 在一个没人会唤醒的 SharedArrayBuffer 上等，真正让出 CPU。
+const sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
+function sleepSync(ms) {
+  Atomics.wait(sleepBuffer, 0, 0, ms);
+}
+
 function referencePlatform(db, itemName) {
   const rows = db
     .prepare(
@@ -76,7 +84,7 @@ function storedDays(db, horizon) {
  * @param horizons 要算的窗口天数数组，比如 [7] 或 [7, 12, 14]
  * @returns 每个窗口新写入了多少天
  */
-export function ensureBaselines(db, horizons, { verbose = false } = {}) {
+export function ensureBaselines(db, horizons, { verbose = false, throttleMs = 0 } = {}) {
   const pending = horizons.filter((h) => Number.isFinite(h) && h > 0);
   if (!pending.length) return {};
 
@@ -140,6 +148,10 @@ export function ensureBaselines(db, horizons, { verbose = false } = {}) {
     if (verbose && processed % 100 === 0) {
       console.log(`[market-baseline] 已扫 ${processed}/${items.length} 个饰品`);
     }
+    // 每个饰品之间歇一下，把磁盘让给常驻采集器。**对副本跑只解决了写锁冲突，没解决
+    // 磁盘争用**：2026-08-14 实测对副本跑的时候，采集器那边 10 分钟的快速同步照样
+    // 交不出一条写入。这台机器只有一块盘、一个核，重活必须自己让路（踩坑 49）。
+    if (throttleMs > 0) sleepSync(throttleMs);
   }
 
   const insert = db.prepare(
