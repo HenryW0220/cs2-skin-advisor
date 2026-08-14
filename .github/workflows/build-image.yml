@@ -90,6 +90,10 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.image }}:latest
             ${{ steps.meta.outputs.image }}:${{ github.sha }}
+          # 容器里没有 .git，分析脚本要把"这批结果是哪版代码算的"写进库（迁移 024），
+          # 只能靠构建时把 commit 带进镜像
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
           # 云端 deploy 脚本靠这个标签核对"拉到的镜像是不是当前这次提交"，
           # 免得推完代码马上部署、结果 CI 还没构建完却以为已经上线了
           labels: org.opencontainers.image.revision=${{ github.sha }}

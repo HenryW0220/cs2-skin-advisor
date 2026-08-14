@@ -19,6 +19,13 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
+# 构建这个镜像的 commit。容器里没有 .git，脚本自己查不到，只能构建时带进来
+# （.github/workflows/build-image.yml 传 github.sha）。
+# 用处：scripts/market-baseline-store.mjs 把它连同口径一起写进 market_baseline_meta——
+# 大盘基准是长期复用的中间产物，"这批基准是哪版代码算的"必须留痕（迁移 024）。
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=${GIT_COMMIT}
+
 # output: "standalone" 产出的最小运行时集合（server.js + 追踪到的那部分 node_modules）
 COPY --from=builder /app/.next/standalone ./
 # 以下四样 standalone 按约定不会自动带上，但这个项目运行时真的要读：

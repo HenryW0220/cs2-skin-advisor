@@ -12,6 +12,14 @@
 //   import { ensureBaselines, loadBaseline } from "./market-baseline-store.mjs";
 //   ensureBaselines(db, [7]);                 // 增量补齐（已存在的天不重算）
 //   const base = loadBaseline(db, 7);         // Map(dayMs -> {median, sampleCount, itemCount})
+//   console.log(baselineProvenance(db));      // 报告抬头：这份基准是哪一版口径算的
+//
+// 口径是版本化的（迁移 024）：每行带 calc_version，改口径就是新写一版、旧行永远保留。
+// 详见下面 BASELINE_CALIBER 那段。
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 export const DAY_MS = 24 * 60 * 60 * 1000;
 export const HOUR_MS = 60 * 60 * 1000;
 
@@ -26,9 +34,47 @@ const MIN_SAMPLES_PER_DAY = 20;
 // 收盘之后再等这么久才认为这一天的基准定型：同步偶尔错过整点，留一点余量
 const SETTLE_MS = 6 * HOUR_MS;
 
-// ⚠️ 改了上面任何一条口径（平台优先级、历史长度门槛、样本下限），
-// 已经存进 market_baseline_daily 的行**不会自动重算**（增量逻辑只补缺的天）。
-// 必须先 DELETE FROM market_baseline_daily 再重跑 builder，否则表里会混着两套口径的数字。
+// ---------- 口径指纹（迁移 024）----------
+// market_baseline_daily 是**算出来的中间产物**，不是观测到的事实：三个评估脚本长期复用它，
+// 所有引用它的结论都隐含"基准是这套口径算的"。所以这里把口径本身摊开写成一个对象，
+// 取它的指纹当 calc_version 存进每一行，并在 market_baseline_meta 里留一份底档。
+//
+// **改口径 = 新版本，永远不覆盖旧行**。旧行留着，8-13 之前那些引用基准的结论才还能复现——
+// 就地重算等于把它们的依据抽走，那是"同一份数据被反复检视"的另一种形式。
+// 用指纹而不是手写版本号：手写的迟早有人忘了改，指纹是改了常量就自动变。
+//
+// ⚠️ 只有**会影响数字**的东西才能进这个对象。脚本改注释、改性能不该让整表失效，
+// 所以 script_sha 只记在 meta 里做取证，不参与指纹。反过来，任何改了数值口径的改动
+// （包括中位数在偶数样本上的取法）**必须**在这里显式登记，否则新旧两套会混进同一版。
+export const BASELINE_CALIBER = {
+  historyGateHours: "24*(horizon+14)",
+  itemUniverse: "DISTINCT item_name FROM price_snapshots",
+  medianRule: "even-count=mean-of-two-middles",
+  minSamplesPerDay: MIN_SAMPLES_PER_DAY,
+  minSnapshotsPerItem: MIN_SNAPSHOTS_PER_ITEM,
+  platformPriority: PLATFORM_PRIORITY.join(","),
+  resample: "hourly-last",
+  settleHours: SETTLE_MS / HOUR_MS,
+};
+// 键排序后再序列化：指纹不能因为字段书写顺序变了就变
+export const BASELINE_CALIBER_JSON = JSON.stringify(
+  Object.fromEntries(Object.entries(BASELINE_CALIBER).sort(([a], [b]) => a.localeCompare(b)))
+);
+export const BASELINE_CALC_VERSION =
+  "b" + createHash("sha1").update(BASELINE_CALIBER_JSON).digest("hex").slice(0, 8);
+
+// 生成这批行的**脚本内容**指纹。比 git commit 准：手工拷进容器跑出来的那种（正是
+// 8-13 首次回填的情况）在 git 上找不到对应 commit，但内容指纹认得出来。
+function scriptSha() {
+  try {
+    return createHash("sha1")
+      .update(readFileSync(fileURLToPath(import.meta.url)))
+      .digest("hex")
+      .slice(0, 12);
+  } catch {
+    return "unknown";
+  }
+}
 
 // 真正的同步 sleep。**不能用忙等**——这台机器只有一个核，忙等是把"占着磁盘"换成
 // "占着 CPU"，采集器一样跑不动。better-sqlite3 是全同步 API，改 async 会波及三个调用方，
@@ -71,9 +117,42 @@ const dayKey = (ms) => new Date(Math.floor(ms / DAY_MS) * DAY_MS).toISOString().
 function storedDays(db, horizon) {
   return new Set(
     db
-      .prepare("SELECT day FROM market_baseline_daily WHERE horizon_days = ?")
-      .all(horizon)
+      .prepare("SELECT day FROM market_baseline_daily WHERE horizon_days = ? AND calc_version = ?")
+      .all(horizon, BASELINE_CALC_VERSION)
       .map((r) => r.day)
+  );
+}
+
+/** 把这一版口径的底档写进 market_baseline_meta（幂等，每次跑完刷新区间和行数）。 */
+function upsertMeta(db) {
+  const stat = db
+    .prepare(
+      `SELECT COUNT(*) rows, MIN(day) first_day, MAX(day) last_day,
+              GROUP_CONCAT(DISTINCT horizon_days) horizons
+       FROM market_baseline_daily WHERE calc_version = ?`
+    )
+    .get(BASELINE_CALC_VERSION);
+  db.prepare(
+    `INSERT INTO market_baseline_meta
+       (calc_version, caliber_json, script_sha, git_commit, horizons, first_day, last_day, row_count)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(calc_version) DO UPDATE SET
+       script_sha = excluded.script_sha,
+       git_commit = excluded.git_commit,
+       horizons = excluded.horizons,
+       first_day = excluded.first_day,
+       last_day = excluded.last_day,
+       row_count = excluded.row_count,
+       updated_at = datetime('now')`
+  ).run(
+    BASELINE_CALC_VERSION,
+    BASELINE_CALIBER_JSON,
+    scriptSha(),
+    process.env.GIT_COMMIT ?? "unknown",
+    stat.horizons ?? "",
+    stat.first_day,
+    stat.last_day,
+    stat.rows
   );
 }
 
@@ -154,10 +233,14 @@ export function ensureBaselines(db, horizons, { verbose = false, throttleMs = 0 
     if (throttleMs > 0) sleepSync(throttleMs);
   }
 
+  // 写进当前口径版本那一格。**别的版本的行一行都不碰**——改口径是新写一版，
+  // 不是就地重算（迁移 024 的整个理由）。同版本内重复写是幂等的（增量已经跳过存过的天，
+  // 这条 upsert 只在同一天被重复要求时兜底）。
   const insert = db.prepare(
-    `INSERT INTO market_baseline_daily (day, horizon_days, median_return, sample_count, item_count)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(day, horizon_days) DO UPDATE SET
+    `INSERT INTO market_baseline_daily
+       (day, horizon_days, calc_version, median_return, sample_count, item_count)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(day, horizon_days, calc_version) DO UPDATE SET
        median_return = excluded.median_return,
        sample_count = excluded.sample_count,
        item_count = excluded.item_count,
@@ -189,14 +272,16 @@ export function ensureBaselines(db, horizons, { verbose = false, throttleMs = 0 
   const written = {};
   const writeAll = db.transaction((rows) => {
     for (const r of rows) {
-      insert.run(r.day, r.horizon, r.median_return, r.sample_count, r.item_count);
+      insert.run(r.day, r.horizon, BASELINE_CALC_VERSION, r.median_return, r.sample_count, r.item_count);
       written[r.horizon] = (written[r.horizon] ?? 0) + 1;
     }
+    upsertMeta(db);
   });
   writeAll(aggregated);
   db.exec("DROP TABLE IF EXISTS _baseline_samples");
 
   if (verbose) {
+    console.log(`[market-baseline] 口径版本 ${BASELINE_CALC_VERSION}：${BASELINE_CALIBER_JSON}`);
     for (const horizon of pending) {
       console.log(`[market-baseline] 窗口 ${horizon} 天：新写入 ${written[horizon] ?? 0} 天`);
     }
@@ -204,13 +289,17 @@ export function ensureBaselines(db, horizons, { verbose = false, throttleMs = 0 
   return written;
 }
 
-/** 读出某个窗口的全部基准。key 是当天 00:00 UTC 的毫秒时间戳，跟脚本里 day 的算法对齐。 */
-export function loadBaseline(db, horizon) {
+/**
+ * 读出某个窗口的全部基准。key 是当天 00:00 UTC 的毫秒时间戳，跟脚本里 day 的算法对齐。
+ * 默认只读**当前口径版本**的行——表里可以并存多版，混着读等于混口径。
+ */
+export function loadBaseline(db, horizon, calcVersion = BASELINE_CALC_VERSION) {
   const rows = db
     .prepare(
-      "SELECT day, median_return, sample_count, item_count FROM market_baseline_daily WHERE horizon_days = ?"
+      `SELECT day, median_return, sample_count, item_count FROM market_baseline_daily
+       WHERE horizon_days = ? AND calc_version = ?`
     )
-    .all(horizon);
+    .all(horizon, calcVersion);
   return new Map(
     rows.map((r) => [
       Date.parse(`${r.day}T00:00:00.000Z`),
@@ -219,14 +308,49 @@ export function loadBaseline(db, horizon) {
   );
 }
 
-/** 表还没建（迁移没跑）时给一句人话，而不是抛一个 no such table。 */
+/** 报告脚本抬头打这一行：任何引用基准的数字，都要能说清是哪一版口径算的。 */
+export function baselineProvenance(db, calcVersion = BASELINE_CALC_VERSION) {
+  const meta = db.prepare("SELECT * FROM market_baseline_meta WHERE calc_version = ?").get(calcVersion);
+  if (!meta) return `基准口径版本 ${calcVersion}：meta 里没有这一版的底档`;
+  return (
+    `基准口径版本 ${calcVersion}（脚本 ${meta.script_sha} / commit ${meta.git_commit}）：` +
+    `${meta.row_count} 行、窗口 ${meta.horizons} 天、${meta.first_day} ~ ${meta.last_day}\n` +
+    `  口径：${meta.caliber_json}`
+  );
+}
+
+/**
+ * 表还没建（迁移没跑）时给一句人话，而不是抛一个 no such table。
+ * 顺带挡住"口径改了但表里没有这一版"的情况——不挡的话 loadBaseline 会返回空 Map，
+ * 报告脚本只会说"还没有基准，去跑 builder"，把**口径失配**说成**数据没到**。
+ */
 export function assertBaselineTable(db) {
-  const row = db
-    .prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type='table' AND name='market_baseline_daily'")
-    .get();
-  if (!row.c) {
+  for (const name of ["market_baseline_daily", "market_baseline_meta"]) {
+    const row = db
+      .prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type='table' AND name = ?")
+      .get(name);
+    if (!row.c) {
+      throw new Error(
+        `${name} 不存在——迁移 023/024 还没跑。容器重启一次（进程启动时会自动跑迁移）再来。`
+      );
+    }
+  }
+  const rows = db.prepare("SELECT COUNT(*) c FROM market_baseline_daily").get().c;
+  if (!rows) return; // 空表是"还没回填"，交给调用方提示去跑 builder
+  const mine = db
+    .prepare("SELECT COUNT(*) c FROM market_baseline_daily WHERE calc_version = ?")
+    .get(BASELINE_CALC_VERSION).c;
+  if (!mine) {
+    const known = db
+      .prepare("SELECT calc_version v, COUNT(*) c FROM market_baseline_daily GROUP BY v")
+      .all()
+      .map((r) => `${r.v}(${r.c} 行)`)
+      .join("、");
     throw new Error(
-      "market_baseline_daily 不存在——迁移 023 还没跑。容器重启一次（进程启动时会自动跑迁移）再来。"
+      `基准口径已改：当前代码算出来的版本是 ${BASELINE_CALC_VERSION}，表里只有 ${known}。\n` +
+        `这不是数据没到，是口径失配。要么把 market-baseline-store.mjs 的口径常量改回去，\n` +
+        `要么用新口径重新回填一版（node scripts/build-market-baseline.mjs …）——\n` +
+        `**不要删旧行**：旧行是 8-13 以来所有引用基准的结论的依据，删了那些结论就没法复现了。`
     );
   }
 }
