@@ -54,6 +54,20 @@ describe("evaluateSellV2", () => {
     });
   });
 
+  // 2026-08-14 登记的性质，见 sell-rule-v2.ts 文件头"洗盘否决改不了任何决策"那段：
+  // 洗盘分支的生效条件是涨幅 <5%，而卖出档要求 ≥15%，两个区间不相交，所以这个分支
+  // 只改 reason、永远改不了 action。**这条锁住的是"它是文案不是风控"**——哪天有人
+  // 把 WASHOUT_VETO_MAX_RETURN 提到 0.15 以上想让它"真的能否决一次卖出"，这里会红，
+  // 红了要先回去看那段注释里的数据（高涨幅档洗盘时超额反而更负），不是改测试。
+  it("洗盘分支只改 reason，永远改不了 action", () => {
+    const washout = [...flat(40), 100, 90, 80, 70, 60, 55, 52, 50]; // 回撤 50%
+    for (const return24h of [-0.3, -0.05, 0, 0.02, 0.049, 0.05, 0.1, 0.149, 0.15, 0.3, 0.6]) {
+      const withWashout = evaluateSellV2({ return24h, hourlyPrices: washout });
+      const withoutWashout = evaluateSellV2({ return24h, hourlyPrices: flat(48, 100) });
+      expect(withWashout.action).toBe(withoutWashout.action);
+    }
+  });
+
   it("价格序列为空时不炸，按无回撤处理", () => {
     const r = evaluateSellV2({ return24h: 0.35, hourlyPrices: [] });
     expect(r.action).toBe("SELL_STRONG");
