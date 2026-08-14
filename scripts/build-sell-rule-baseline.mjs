@@ -34,11 +34,30 @@ import Database from "better-sqlite3";
 import { assertBaselineTable, baselineProvenance, loadBaseline } from "./market-baseline-store.mjs";
 import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
+// ---- --since：把样本限制在某个日期之后，用来做 régime 复核 ----
+// 加这个参数的唯一理由（2026-08-14）：`report-regime-boundaries.mjs` 查出 2026-04 那批台阶
+// 和 5~6 月平台数在 1↔5 之间反复跳，**至今没有对应的已知配置变更**。平台数变化直接改变
+// 多平台取价的构成，也就直接改变这里算的每一个收益和超额——而这张表跨越了那一段
+// （714 饰品 / 99 天），v2 的**全部**阈值从它反推。
+//
+// **不能因为它是我们喜欢的结论就给它豁免。** 但也不能借机重跑一切——那就是在搜。
+// 所以做成一次**有界的、预先声明的方向性复核**，声明写在这里（不是事后补的）：
+//   · 只问一个问题：把样本限制在 2026-07-01 之后，**>30% 那个台阶在方向上还在不在**。
+//   · **这是一次检验，不是一组。** 幅度和 p 值都不看——样本会大幅缩水，看了就是在搜。
+//   · 台阶还在 → HANDOFF 注明"已用后 régime 数据做过方向性复核"，继续用，**不改阈值**。
+//   · 台阶没了 → v2 失去地基，接进 /positions 的讨论全部暂停，先去查 régime 是什么。
 const args = parseScriptArgs({
   name: "build-sell-rule-baseline",
-  usage: "node scripts/build-sell-rule-baseline.mjs [库文件]",
+  usage: "node scripts/build-sell-rule-baseline.mjs [库文件] [--since YYYY-MM-DD]",
+  values: { "--since": { parse: String, default: "", label: "只用这个日期之后的样本" } },
   positionals: [{ name: "dbPath", label: "库文件", default: null }],
 });
+const sinceDay = args.values["--since"];
+const sinceMs = sinceDay ? Date.parse(`${sinceDay}T00:00:00.000Z`) : null;
+if (sinceDay && !Number.isFinite(sinceMs)) {
+  console.error(`✗ --since 的值 "${sinceDay}" 不是合法日期（要 YYYY-MM-DD）`);
+  process.exit(1);
+}
 const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 const HOUR_MS = 36e5;
 const DAY_MS = 24 * HOUR_MS;
@@ -122,6 +141,8 @@ for (const item of items) {
     const inWashout = peak > 0 && (peak - price) / peak > WASHOUT_DRAWDOWN;
 
     const day = Math.floor(ts / DAY_MS) * DAY_MS;
+    // régime 复核：只保留边界之后的样本（见文件上方 --since 那段预先声明）
+    if (sinceMs !== null && ts < sinceMs) continue;
     samples.push({ day, band, fwd, inWashout });
   }
   if (samples.length) perItemSamples.set(item, samples);
@@ -158,6 +179,12 @@ for (const [, samples] of perItemSamples) {
 }
 
 console.log(`参与统计的饰品：${itemsUsed} 个；大盘基准覆盖 ${marketByDay.size} 天`);
+if (sinceDay) {
+  console.log(
+    `⚠️ **régime 复核模式**：样本已限制在 ${sinceDay} 之后。这是一次预先声明的方向性检验，` +
+      `只看 >30% 那个台阶还在不在——**幅度和 p 值不作数**（样本大幅缩水，看了就是在搜）。`
+  );
+}
 console.log("");
 console.log(`口径：超额 = 该样本未来 ${HORIZON_DAYS} 天收益 − 当天全市场中位数。只看中位数，均值被重尾主导没有意义。`);
 console.log("");

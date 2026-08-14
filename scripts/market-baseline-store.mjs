@@ -43,6 +43,20 @@ const SETTLE_MS = 6 * HOUR_MS;
 // 就地重算等于把它们的依据抽走，那是"同一份数据被反复检视"的另一种形式。
 // 用指纹而不是手写版本号：手写的迟早有人忘了改，指纹是改了常量就自动变。
 //
+// ⚠️ **已知缺陷，还没修，修它要新开一版口径**（2026-08-14 发现）：
+// 下面 ensureBaselines 的定型检查是**逐小时** `break` 的，但写库是**整天**写的。
+// 后果是**卡在定型边界上的那一天会被写成半天，而且从此不再重算**（storedDays 认为它有了）。
+// 实测：生产库里窗口 7 天的 2026-08-06 只有 14 小时样本（4550/325），完整应是 24 小时；
+// 用完整数据重算得到 −2.38%，库里存的是 −2.14%。**每次回填的最后一天都有这个问题**
+// （8 个窗口各一天，858 行里 8 行）。
+// **为什么不顺手修**：修了会改变那些行的数字，按迁移 024 定的规矩，改变数字 = 新开一版
+// calc_version 并整体重算，旧行保留。那是一次要项目所有者拍板的动作（会牵动已经报出去的
+// +16.79% 等数字），不能在一次顺手提交里做掉。
+// **已经做的止血**：`--daily` 模式按"当天最后一小时是否定型"选日子，所以**往后不会再产生
+// 新的半天行**；存量那 8 行原样保留，等口径升版时一起重算。
+// 注意：多数天的样本数不到 24 小时/饰品是**另一回事**（采集本身有缺口，同一小时两端都要有价
+// 才算一个样本），那是数据密度不是这个缺陷，别混。
+//
 // ⚠️ 只有**会影响数字**的东西才能进这个对象。脚本改注释、改性能不该让整表失效，
 // 所以 script_sha 只记在 meta 里做取证，不参与指纹。反过来，任何改了数值口径的改动
 // （包括中位数在偶数样本上的取法）**必须**在这里显式登记，否则新旧两套会混进同一版。
@@ -98,18 +112,51 @@ function referencePlatform(db, itemName) {
   return rows[0]?.n >= MIN_SNAPSHOTS_PER_ITEM ? rows[0].platform : null;
 }
 
-function hourlyPrices(db, itemName, platform) {
-  const rows = db
-    .prepare(
-      `SELECT captured_at, price FROM price_snapshots
-       WHERE item_name = ? AND platform = ? AND price > 0 ORDER BY captured_at ASC`
-    )
-    .all(itemName, platform);
+/**
+ * 按小时重采样的价格序列。`fromMs` 给定时只读这个时间点之后的部分——
+ * **日常增量靠这个才便宜**：只补刚刚成熟的那一天时，每个饰品只需要 [D, D+窗口] 这一小段，
+ * 而不是把 111 天历史整个读出来。不给 `fromMs` 就是全量（首次回填走这条）。
+ */
+function hourlyPrices(db, itemName, platform, fromMs = null) {
+  const rows =
+    fromMs === null
+      ? db
+          .prepare(
+            `SELECT captured_at, price FROM price_snapshots
+             WHERE item_name = ? AND platform = ? AND price > 0 ORDER BY captured_at ASC`
+          )
+          .all(itemName, platform)
+      : db
+          .prepare(
+            `SELECT captured_at, price FROM price_snapshots
+             WHERE item_name = ? AND platform = ? AND price > 0 AND captured_at >= ?
+             ORDER BY captured_at ASC`
+          )
+          .all(itemName, platform, new Date(fromMs).toISOString());
   const byHour = new Map();
   for (const r of rows) {
     byHour.set(Math.floor(Date.parse(r.captured_at) / HOUR_MS) * HOUR_MS, r.price);
   }
   return [...byHour.entries()].sort((a, b) => a[0] - b[0]);
+}
+
+/**
+ * 这个饰品一共有多少个不同的小时桶（历史长度门槛用的就是这个数）。
+ *
+ * **为什么不能省掉这一步直接用截断后的序列长度**：门槛 `24×(窗口+14)` 判的是
+ * **全部历史**够不够长，而日常增量只读最近几天——拿截断后的长度去判，几乎所有饰品都会
+ * 被判为"历史不够"而被剔掉，**参与基准的饰品集合就变了，基准跟着变，v2 那些阈值的
+ * 依据也就漂了**。更糟的是 `BASELINE_CALC_VERSION` 只按常量算，这种改动**不会**让口径
+ * 指纹变化，于是新旧两套数字会混进同一版里而没有任何东西报错——正是迁移 024 要防的事。
+ * 所以门槛照旧用全量口径，只是改成一条聚合查询拿回一个数，不再把整段历史读进 JS。
+ */
+function hourBucketCount(db, itemName, platform) {
+  return db
+    .prepare(
+      `SELECT COUNT(DISTINCT substr(captured_at, 1, 13)) n FROM price_snapshots
+       WHERE item_name = ? AND platform = ? AND price > 0`
+    )
+    .get(itemName, platform).n;
 }
 
 const dayKey = (ms) => new Date(Math.floor(ms / DAY_MS) * DAY_MS).toISOString().slice(0, 10);
@@ -163,12 +210,52 @@ function upsertMeta(db) {
  * @param horizons 要算的窗口天数数组，比如 [7] 或 [7, 12, 14]
  * @returns 每个窗口新写入了多少天
  */
-export function ensureBaselines(db, horizons, { verbose = false, throttleMs = 0 } = {}) {
+export function ensureBaselines(db, horizons, { verbose = false, throttleMs = 0, daily = false } = {}) {
   const pending = horizons.filter((h) => Number.isFinite(h) && h > 0);
   if (!pending.length) return {};
 
   const existing = new Map(pending.map((h) => [h, storedDays(db, h)]));
   const cutoff = Date.now();
+
+  // ---- daily 模式：只补"刚刚成熟的那几天"，不做全表扫 ----
+  // 一天的基准要到 day + horizon + 6h 才定型，所以**报告永远缺最近 horizon 天**，
+  // 这是成熟度的形状不是缺口。真正需要每天补的只有边界上那一两天。
+  // 算出所有 pending 窗口里"还没存过且已经定型"的最早那一天，从它往前一点开始读就够了——
+  // 每个饰品只读几天而不是整段历史。门槛仍然按全量口径判（见 hourBucketCount 的注释）。
+  let readFromMs = null;
+  if (daily) {
+    let earliest = Infinity;
+    for (const horizon of pending) {
+      const done = existing.get(horizon);
+      // 从最新往回找，找到第一个"已定型但没存过"的日子；最多回溯 30 天，
+      // 再往前说明这不是日常增量而是补历史，那种情况不该走 daily 模式
+      for (let back = 0; back <= 30; back++) {
+        const dayMs = Math.floor((cutoff - back * DAY_MS) / DAY_MS) * DAY_MS;
+        // ⚠️ 判定用**当天最后一个小时**而不是 00:00。用 00:00 的话，一天刚够到定型线时
+        // 这一天就会被选中，但它靠后的那些小时还没到期，下面的循环会 break 掉，
+        // 于是**写进去的是半天数据、而且从此不再重算**（storedDays 认为这天已经有了）。
+        // 生产库里已经存在这样的行：窗口 7 天的 2026-08-06 只有 14 小时（4550/325），
+        // 而完整的一天是 24 小时——那是 8-13 19:25 那次回填卡在定型边界上冻住的。
+        // 晚一天写、写完整的，比早一天写、永久半份要好。
+        const lastHourMs = dayMs + DAY_MS - HOUR_MS;
+        if (lastHourMs + horizon * DAY_MS + SETTLE_MS > cutoff) continue; // 整天还没定型
+        if (done.has(dayKey(dayMs))) continue; // 已经有了
+        earliest = Math.min(earliest, dayMs);
+      }
+    }
+    if (earliest === Infinity) {
+      if (verbose) console.log("[market-baseline] daily：没有已定型且缺失的日子，无事可做");
+      return {};
+    }
+    // 往前留一天余量，避免边界上的小时桶被切掉
+    readFromMs = earliest - DAY_MS;
+    if (verbose) {
+      console.log(
+        `[market-baseline] daily 模式：只补 ${dayKey(earliest)} 起的日子，` +
+          `每个饰品从 ${new Date(readFromMs).toISOString().slice(0, 10)} 读起（不是全量）`
+      );
+    }
+  }
 
   // 样本落到一张临时表里再让 SQLite 排序求中位数，**不在内存里攒**。
   // 这台机器是 1 核 1GB：第一版把所有 (天, 窗口) 的收益数组全揣在 JS 里，跑了 25 分钟
@@ -197,14 +284,18 @@ export function ensureBaselines(db, horizons, { verbose = false, throttleMs = 0 
   for (const item of items) {
     const platform = referencePlatform(db, item);
     if (!platform) continue;
-    const series = hourlyPrices(db, item, platform);
+    const series = hourlyPrices(db, item, platform, readFromMs);
+    // 门槛判的是全部历史的长度。全量模式下 series 本身就是全部历史，直接用它的长度；
+    // daily 模式下 series 是截断过的，必须另外问一次全量的小时桶数，否则会改变
+    // 参与基准的饰品集合（见 hourBucketCount 的注释）
+    const fullLength = readFromMs === null ? series.length : hourBucketCount(db, item, platform);
     const hourIndex = new Map(series.map(([h], i) => [h, i]));
     const samples = [];
     for (const horizon of pending) {
       // 历史长度门槛跟 build-sell-rule-baseline.mjs 完全一致（24 × (窗口 + 14) 小时）。
       // **这条必须对齐**：v2 的全部阈值是从那个脚本反推的，参与基准的饰品集合一变，
       // 基准就变、超额就变，那些阈值的依据也就跟着漂了。
-      if (series.length < 24 * (horizon + 14)) continue;
+      if (fullLength < 24 * (horizon + 14)) continue;
       const done = existing.get(horizon);
       for (let i = 0; i < series.length; i++) {
         const [ts, price] = series[i];
@@ -212,6 +303,16 @@ export function ensureBaselines(db, horizons, { verbose = false, throttleMs = 0 
         if (ts + horizon * DAY_MS + SETTLE_MS > cutoff) break;
         const day = dayKey(ts);
         if (done.has(day)) continue;
+        // daily 模式额外要求**整天**都定型了才写。逐小时 break 会让卡在定型边界上的那天
+        // 只写进去半天、而且从此不再重算（见文件上方"已知缺陷"）。daily 是每天都会跑的，
+        // 晚一天写、写完整的没有任何损失。
+        // **全量模式保持原样不动**：改它会改变已有那 8 行边界日的数字，按迁移 024 的规矩
+        // 那就得新开一版口径整体重算，是要拍板的动作，不能顺手做掉。
+        // 所以两个模式的差别**只有"这一天现在写还是明天写"**，写下去的值完全同口径。
+        if (daily) {
+          const dayEndMs = Math.floor(ts / DAY_MS) * DAY_MS + DAY_MS - HOUR_MS;
+          if (dayEndMs + horizon * DAY_MS + SETTLE_MS > cutoff) break;
+        }
 
         const futureIdx = hourIndex.get(ts + horizon * DAY_MS);
         if (futureIdx === undefined) continue;
@@ -287,6 +388,40 @@ export function ensureBaselines(db, horizons, { verbose = false, throttleMs = 0 
     }
   }
   return written;
+}
+
+/**
+ * 每日采集规模写进 market_regime_daily（迁移 025）。**这是数据本身的属性，跟基准口径无关**，
+ * 所以不挂在 market_baseline_daily 上、也不带 calc_version（挂上去会让同一个事实在每个口径
+ * 版本里各存一份，而且按护栏 (b) 存量行不能改写，加列只会得到一堆 NULL）。
+ * `fromDay` 给定时只算那天之后（日常增量用），不给就是全量（首次/补历史用）。
+ */
+export function recordRegimeDaily(db, fromDay = null) {
+  const rows = db
+    .prepare(
+      `SELECT substr(captured_at, 1, 10) day, COUNT(*) rows_n,
+              COUNT(DISTINCT item_name) items, COUNT(DISTINCT platform) platforms
+       FROM price_snapshots
+       WHERE (? IS NULL OR captured_at >= ?)
+       GROUP BY 1`
+    )
+    .all(fromDay, fromDay ? `${fromDay}T00:00:00.000Z` : null);
+  const insert = db.prepare(
+    `INSERT INTO market_regime_daily (day, snapshot_rows, item_count, platform_count)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(day) DO UPDATE SET
+       snapshot_rows = excluded.snapshot_rows,
+       item_count = excluded.item_count,
+       platform_count = excluded.platform_count,
+       computed_at = datetime('now')`
+  );
+  // 这张表存的是"当天实际发生了什么"，同一天重算得到同样的结果（除非当天还没过完），
+  // 所以 upsert 是安全的——**它跟基准那张"不得改写存量行"的表性质不同**：
+  // 基准是用某套口径算出来的解释，régime 是数据本身的属性。
+  db.transaction(() => {
+    for (const r of rows) insert.run(r.day, r.rows_n, r.items, r.platforms);
+  })();
+  return rows.length;
 }
 
 /**

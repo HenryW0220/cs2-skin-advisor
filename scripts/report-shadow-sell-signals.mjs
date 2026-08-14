@@ -130,14 +130,29 @@ const COST_LINE = 0.067;
 // 缺基准的样本会被剔除。**剔除必须留痕到"哪一天、哪个窗口"这个粒度**：如果缺口
 // 系统性地只落在某一类样本上（比如全都是最早那几天、或全都是某个窗口），剔除就从
 // "少几条"变成了选择偏差，而看总数是看不出来的。
-let missingBaselineDays = 0;
-const missingDays = new Set();
+//
+// ⚠️ **但缺基准有两类，混在一起打等于把告警埋进噪音**（2026-08-14 教训：第一版只报一个
+// 总数，从 9 条涨到 135 条看着像故障，其实绝大部分是结构性的）：
+//   (a) **未成熟**——D 日的 N 天窗口本来就要到 D+N（再加 6 小时定型）才可能算得出来，
+//       所以**报告永远缺最近 N 天，这不是缺口是成熟度的形状**，排什么定时任务都消除不了，
+//       判读时本来就该扣掉；
+//   (b) **已成熟但基准缺失**——窗口早就到期了却查不到，说明 builder 没跑或跑漏了。
+//       **只有这一类是真告警。**
+// 分开打之后，(b) 出现一条就该红，不会再被 (a) 的几百条淹掉。
+const SETTLE_MS = 6 * HOUR_MS; // 跟 market-baseline-store.mjs 的 SETTLE_MS 一致
+let missingImmature = 0; // (a) 窗口还没到期
+let missingSettled = 0; // (b) 已成熟却查不到 —— 这个才是告警
+const missingSettledDays = new Set();
 function marketBaseline(decidedAt) {
-  const day = Math.floor(Date.parse(decidedAt) / DAY_MS) * DAY_MS;
-  const hit = baselineByDay.get(day);
+  const dayMs = Math.floor(Date.parse(decidedAt) / DAY_MS) * DAY_MS;
+  const hit = baselineByDay.get(dayMs);
   if (!hit) {
-    missingBaselineDays += 1;
-    missingDays.add(new Date(day).toISOString().slice(0, 10));
+    // 这一天的基准要到 day + horizon + 定型余量 之后才可能存在
+    if (dayMs + HORIZON_DAYS * DAY_MS + SETTLE_MS > Date.now()) missingImmature += 1;
+    else {
+      missingSettled += 1;
+      missingSettledDays.add(new Date(dayMs).toISOString().slice(0, 10));
+    }
     return null;
   }
   return hit.median;
@@ -168,15 +183,24 @@ for (const s of signals) {
 console.log("");
 console.log("=== 命中率（未到期或缺对照基准的样本已剔除）===");
 console.log(`未到期/无法评估：${pending} 条`);
-if (missingBaselineDays > 0) {
-  const days = [...missingDays].sort();
+if (missingImmature > 0) {
   console.log(
-    `其中 ${missingBaselineDays} 条是**当天没有大盘基准**（窗口 ${HORIZON_DAYS} 天，物化表里缺这 ${days.length} 天：` +
-      `${days.slice(0, 8).join(", ")}${days.length > 8 ? " …" : ""}）——补一下再看：node scripts/build-market-baseline.mjs`
+    `  · 其中 ${missingImmature} 条是**基准还没成熟**（决策日 + ${HORIZON_DAYS} 天窗口尚未定型）——` +
+      `**预期内，不是缺口**：报告永远缺最近 ${HORIZON_DAYS} 天，这是成熟度的形状，排定时任务也消除不了。`
+  );
+}
+if (missingSettled > 0) {
+  const days = [...missingSettledDays].sort();
+  console.log(
+    `  · ⚠️ **另有 ${missingSettled} 条是已成熟却查不到基准**（缺这 ${days.length} 天：` +
+      `${days.slice(0, 8).join(", ")}${days.length > 8 ? " …" : ""}）。**这一类才是真缺口**，` +
+      `说明 builder 没跑或跑漏了：node scripts/build-market-baseline.mjs ${HORIZON_DAYS}`
   );
   console.log(
-    "  ⚠️ 缺的日子如果集中在某一段（比如全在数据最早那几天），剔除就是选择偏差不是随机损耗，下面的数字要打折看。"
+    "    缺的日子如果集中在某一段，剔除就是选择偏差不是随机损耗，下面的数字要打折看。"
   );
+} else {
+  console.log("  · 已成熟但缺基准：0 条（这一类是真告警，0 才是正常）。");
 }
 console.log("");
 console.log("动作         | 可评估 | 超额中位数 | 判对的 | 命中率");

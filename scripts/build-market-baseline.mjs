@@ -22,6 +22,7 @@ import {
   baselineProvenance,
   BASELINE_CALC_VERSION,
   ensureBaselines,
+  recordRegimeDaily,
 } from "./market-baseline-store.mjs";
 import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
@@ -32,11 +33,16 @@ import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 const args = parseScriptArgs({
   name: "build-market-baseline",
   usage: "node scripts/build-market-baseline.mjs [窗口天数…] [--throttle-ms N]",
+  booleans: ["--daily"],
   values: { "--throttle-ms": { parse: Number, default: 0, label: "让路毫秒" } },
   restNumbers: { name: "horizons", default: [7], label: "窗口天数" },
 });
 const throttleMs = args.values["--throttle-ms"];
 const horizons = args.horizons;
+// --daily：只补刚刚成熟的那几天，每个饰品只读边界附近几天而不是整段历史。
+// 这条是为了让"每天补一次"能在生产库上直接跑而不触发踩坑 49——一天的量天然满足约束，
+// 不必在"排定时"和"接受报告永远缺最新一天"之间二选一。首次回填/补历史仍然用全量模式。
+const daily = args.booleans["--daily"];
 
 const db = new Database(resolveDbPath(args.dbPath));
 assertBaselineTable(db);
@@ -44,7 +50,13 @@ assertBaselineTable(db);
 const startedAt = Date.now();
 console.log(`窗口：${horizons.join(", ")} 天`);
 if (throttleMs) console.log(`每个饰品之间让路 ${throttleMs}ms，给采集器留磁盘`);
-const written = ensureBaselines(db, horizons, { verbose: true, throttleMs });
+const written = ensureBaselines(db, horizons, { verbose: true, throttleMs, daily });
+
+// 顺带把每日采集规模记下来（迁移 025）。daily 模式只补最近几天，全量模式重算整表。
+// 放在这个脚本里是因为**报告脚本一律只读**，写库的只有 builder 和 merge 两个。
+const regimeFrom = daily ? new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10) : null;
+const regimeDays = recordRegimeDaily(db, regimeFrom);
+console.log(`[market-regime] 记录了 ${regimeDays} 天的采集规模${regimeFrom ? `（${regimeFrom} 起）` : "（全量）"}`);
 
 for (const horizon of horizons) {
   const row = db

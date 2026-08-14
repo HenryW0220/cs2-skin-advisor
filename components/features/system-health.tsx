@@ -29,9 +29,20 @@ export function SystemHealth() {
 
   return (
     <div className="space-y-2">
+      {/*
+        0 订阅时要说清**该做什么**，不能只说"异常"。这里有一个容易误导人的边界：
+        2026-08-14 补的两处自愈（页面加载时按 endpoint upsert、pushsubscriptionchange）
+        只能救"订阅还在、但端点被浏览器换掉了"，**救不了 0 条**——0 条意味着没有任何设备
+        登记过，自愈没有东西可自愈。所以这一行必须明说"需要在设备上手动订阅一次"，
+        否则看到的人会以为等一会儿它自己会好。
+      */}
       <Row
         label="推送订阅设备"
-        value={health.pushSubscriptions === 0 ? "0 台 · 预警不会送达任何设备" : `${health.pushSubscriptions} 台`}
+        value={
+          health.pushSubscriptions === 0
+            ? "0 台 · 没有任何设备订阅，预警不会送达——需要在设备上手动订阅一次（自愈救不了 0 条）"
+            : `${health.pushSubscriptions} 台`
+        }
         alarm={health.pushSubscriptions === 0}
       />
       <Row label="最近一次推送成功" value={formatWhen(health.lastPushSuccessAt)} alarm={!health.lastPushSuccessAt} />

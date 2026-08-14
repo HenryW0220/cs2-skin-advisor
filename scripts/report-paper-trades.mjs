@@ -95,12 +95,19 @@ console.log("");
 const baselineCache = new Map(); // horizon -> Map(dayMs -> {median})
 const missingBaselineKeys = new Set(); // `${day}|${horizon}`，最后打印成一条 builder 命令
 
+// 缺基准分两类，只有第二类是告警（同 report-shadow-sell-signals.mjs 的注释）：
+// (a) 未成熟——开仓日 + 持有窗口还没走完，本来就算不出来，预期内；
+// (b) 已成熟却查不到——builder 没跑或跑漏了，**这一类才该红**。
+// 混在一起打的话，真出问题会被淹在"预期内"的噪音里，而这正是这条留痕想防的事。
+const BASELINE_SETTLE_MS = 6 * HOUR_MS;
+let missingImmature = 0;
 function marketReturn(fromMs, horizonDays) {
   const day = Math.floor(fromMs / DAY_MS) * DAY_MS;
   if (!baselineCache.has(horizonDays)) baselineCache.set(horizonDays, loadBaseline(db, horizonDays));
   const hit = baselineCache.get(horizonDays).get(day);
   if (!hit) {
-    missingBaselineKeys.add(`${new Date(day).toISOString().slice(0, 10)}|${horizonDays}`);
+    if (day + horizonDays * DAY_MS + BASELINE_SETTLE_MS > Date.now()) missingImmature += 1;
+    else missingBaselineKeys.add(`${new Date(day).toISOString().slice(0, 10)}|${horizonDays}`);
     return null;
   }
   return hit.median;
@@ -216,6 +223,10 @@ if (missingBaseline) {
   console.log(
     `⚠️  ${missingBaseline}/${usable.length} 笔取不到大盘基准，已从超额统计中剔除` +
       `（占 ${((100 * missingBaseline) / usable.length).toFixed(1)}%）`
+  );
+  console.log(
+    `   其中 ${missingImmature} 笔是**窗口还没走完**（预期内，不是缺口）；` +
+      `${missingBaseline - missingImmature} 笔是**已成熟却查不到**——只有后者是真告警。`
   );
   const byHorizon = [...missingByHorizon.entries()].sort((a, b) => a[0] - b[0]);
   console.log(
