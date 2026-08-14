@@ -1,7 +1,13 @@
 import { daysSince, getSystemHealth } from "@/lib/health";
 
-function formatWhen(iso: string | null): string {
-  if (!iso) return "从来没有过";
+// 空值绝不能显示成"从来没有过"——那是一句关于整个项目历史的话，而 health_signals
+// 是 2026-08-14 才建的表，在那之前的事它一概不知道。**"没有记录"和"从来没发生过"是两回事。**
+function formatWhen(iso: string | null, recordingSince?: string | null): string {
+  if (!iso) {
+    if (!recordingSince) return "无记录（这张表还没有任何数据）";
+    const since = new Date(recordingSince).toLocaleString("zh-CN", { hour12: false });
+    return `无记录（仅代表 ${since} 开始记录以来没有过，更早的事没有留痕）`;
+  }
   const days = daysSince(iso);
   const stamp = new Date(iso).toLocaleString("zh-CN", { hour12: false });
   if (days === null) return stamp;
@@ -45,8 +51,17 @@ export function SystemHealth() {
         }
         alarm={health.pushSubscriptions === 0}
       />
-      <Row label="最近一次推送成功" value={formatWhen(health.lastPushSuccessAt)} alarm={!health.lastPushSuccessAt} />
-      <Row label="最近一次推送尝试" value={formatWhen(health.lastPushAttemptAt)} />
+      <Row
+        label="最近一次推送成功"
+        value={formatWhen(health.lastPushSuccessAt, health.recordingSince)}
+        alarm={!health.lastPushSuccessAt}
+      />
+      {/*
+        这一行只在**真的有目标设备**时才会被记（lib/api/web-push.ts）。此前零订阅下的空转
+        也记成"尝试"，于是同一个时间戳既可能是"发了但失败"也可能是"根本没有可发的对象"，
+        而这两种状态要做的事完全不同。
+      */}
+      <Row label="最近一次推送尝试" value={formatWhen(health.lastPushAttemptAt, health.recordingSince)} />
       {health.lastSubscriptionDropped && (
         <Row
           label="最近一次订阅掉线"
@@ -69,6 +84,17 @@ export function SystemHealth() {
           scripts/fix-backup-task.ps1（管理员）。
         </p>
       )}
+      {/*
+        整块共享一个隐含的"页面渲染时刻"，而那个时刻本身不显示——读的人无从判断这些数字
+        是新的还是卡住的。**这块面板的失效形态恰好是"显示一个看起来正常的数"**：
+        2026-08-14 订阅成功那一刻这里还显示 0 台（偏低，刷新就对了），而同样的机制
+        偏高时更危险——快照卡住会一直显示陈旧的"1 台"，没人会想到去刷新。
+        所以时刻要显示出来，而不是靠"应该挺新的"这种默认假设。
+      */}
+      <p className="pt-1 text-[11px] text-neutral-600">
+        数据截至 {new Date(health.snapshotAt).toLocaleString("zh-CN", { hour12: false })}
+        （服务端渲染时刻；订阅状态变化后本页会自动重新拉取）
+      </p>
     </div>
   );
 }

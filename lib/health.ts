@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { getHealthSignal } from "./db/health-signals";
+import { getEarliestHealthSignalAt, getHealthSignal } from "./db/health-signals";
 import { listPushSubscriptions } from "./db/push-subscriptions";
 
 export interface IOffsiteBackupStatus {
@@ -14,6 +14,10 @@ export interface ISystemHealth {
   pushSubscriptions: number;
   lastPushSuccessAt: string | null;
   lastPushAttemptAt: string | null;
+  /** health_signals 最早的一条记录时间。空值只说明"这张表建表以来没记到过"，不是历史结论 */
+  recordingSince: string | null;
+  /** 这份快照的取值时刻——每个字段都要能说清"数据截至什么时候" */
+  snapshotAt: string;
   lastSubscriptionDropped: { at: string; endpoint: string; remaining: number } | null;
   offsiteBackup: IOffsiteBackupStatus | null;
   offsiteBackupError: string | null;
@@ -49,6 +53,16 @@ export function getSystemHealth(): ISystemHealth {
     pushSubscriptions: listPushSubscriptions().length,
     lastPushSuccessAt: getHealthSignal("last_push_success_at")?.value ?? null,
     lastPushAttemptAt: getHealthSignal("last_push_attempt_at")?.value ?? null,
+    // **"没有记录"和"从来没成功过"是两回事。** health_signals 是 2026-08-14 才建的表，
+    // 在那之前发生过什么它一概不知道；空值只说明"这张表没记到过"，不是历史结论。
+    // 没有这个字段的话，面板上的"从来没有过"会被读成一个关于整个项目历史的判断。
+    recordingSince: getEarliestHealthSignalAt(),
+    // 这份快照是什么时候取的。**一个数字单独出现时没有"正常"可言**——面板整块共享一个
+    // 隐含的"页面渲染时刻"，而那个时刻本身不显示，读的人无从判断数字是新的还是卡住的。
+    // 2026-08-14 就撞到过：订阅成功那一刻推送卡片显示 1 台、运行状态仍显示 0 台。
+    // 那次是偏低（刷新就对了），但同一个失效形态**偏高时更危险**：快照卡住会一直显示
+    // 陈旧的"1 台"，数字看起来正常，没人会想到去刷新。
+    snapshotAt: new Date().toISOString(),
     lastSubscriptionDropped: dropped
       ? (JSON.parse(dropped.value) as { at: string; endpoint: string; remaining: number })
       : null,

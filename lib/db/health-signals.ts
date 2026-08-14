@@ -15,6 +15,18 @@ export interface IHealthSignal {
   updated_at: string;
 }
 
+/**
+ * 这张表最早的一条记录时间，用来区分"从来没成功过"和"这张表建之前的事我不知道"。
+ * health_signals 是 2026-08-14 才建的（迁移 021 之后），在那之前的推送成功与否它一概没记，
+ * 而面板上一个空值看起来就像一个关于整个项目历史的结论。返回 null 表示表里一条都没有。
+ */
+export function getEarliestHealthSignalAt(): string | null {
+  const row = getDb().prepare("SELECT MIN(updated_at) at FROM health_signals").get() as {
+    at: string | null;
+  };
+  return row?.at ?? null;
+}
+
 export function setHealthSignal(key: IHealthSignalKey, value: string): void {
   getDb()
     .prepare(

@@ -45,6 +45,14 @@ export async function sendPushNotification(payload: IPushNotificationPayload): P
   let failed = 0;
   let remaining = subscriptions.length;
 
+  // **只有真的有目标设备时才算一次"尝试"。** 原来这行在循环外无条件执行，于是零订阅下的
+  // 空转也被记成尝试——2026-08-14 05:27 那条就是这么来的（当时 push_subscriptions 是 0 行，
+  // 一条都没发出去）。那样这个字段没有信息量：它既可能表示"发了但失败"，也可能表示
+  // "根本没有可发的对象"，而这两种状态要做的事完全不同。
+  // 零订阅这件事本身由"推送订阅设备 0 台"那一行负责显示，不需要在这里重复表达。
+  if (subscriptions.length === 0) {
+    return { data: { sent: 0, failed: 0 } };
+  }
   setHealthSignal("last_push_attempt_at", new Date().toISOString());
 
   for (const sub of subscriptions) {

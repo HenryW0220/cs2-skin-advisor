@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 function urlBase64ToUint8Array(base64String: string) {
@@ -15,7 +16,12 @@ function urlBase64ToUint8Array(base64String: string) {
 // pushManager.subscribe 会直接失败。这个判断只用来**提示**，不阻止用户点。
 function isIosWithoutStandalone(): boolean {
   if (typeof navigator === "undefined") return false;
-  const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  // iPadOS 13 起 Safari 默认报的是 Macintosh 的 UA，`/iPad/` 匹配不到——**而它照样受
+  // "普通标签页不允许订阅推送"这条限制**，于是最需要这条提示的设备恰好看不到它。
+  // 用"报 Mac 但有多点触控"把 iPad 认出来（桌面 Mac 的 maxTouchPoints 是 0）。
+  const ua = navigator.userAgent;
+  const isIpadOsAsMac = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+  const isIos = /iPad|iPhone|iPod/.test(ua) || isIpadOsAsMac;
   const standalone =
     window.matchMedia?.("(display-mode: standalone)").matches ||
     (window.navigator as { standalone?: boolean }).standalone === true;
@@ -34,6 +40,12 @@ export function PushNotificationManager({ vapidPublicKey }: { vapidPublicKey: st
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [needsPwaHint, setNeedsPwaHint] = useState(false);
+  // 订阅状态一变就让服务端组件重新取一次数（运行状态面板是服务端渲染的）。
+  // 不加这一下的话，订阅成功后同屏的"推送订阅设备"还停在旧值——2026-08-14 实测：
+  // 推送卡片已显示"服务端已登记 1 台"，运行状态仍是 0 台，刷新后才一致。
+  // **那次是偏低、刷新就对了；但同一个机制偏高时更危险**（快照卡住会一直显示陈旧的台数，
+  // 数字看着正常，没人会想到刷新），所以这里主动失效，不依赖用户重新加载页面。
+  const router = useRouter();
 
   useEffect(() => {
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
@@ -89,6 +101,7 @@ export function PushNotificationManager({ vapidPublicKey }: { vapidPublicKey: st
       setServerTotal(await upsertSubscription(sub));
       setSubscription(sub);
       setMessage(null);
+      router.refresh(); // 让服务端渲染的运行状态面板跟着更新，别停在订阅前的快照
     } catch (err) {
       setMessage(
         needsPwaHint
@@ -113,6 +126,7 @@ export function PushNotificationManager({ vapidPublicKey }: { vapidPublicKey: st
       await subscription.unsubscribe();
       setSubscription(null);
       setServerTotal(null);
+      router.refresh();
     } catch (err) {
       setMessage(errorText(err));
     } finally {
@@ -133,6 +147,7 @@ export function PushNotificationManager({ vapidPublicKey }: { vapidPublicKey: st
           ? "服务端没有任何订阅记录，这条测试推送没有发给任何设备"
           : `已发送（成功 ${json.data.sent}，失败 ${json.data.failed}）`
       );
+      router.refresh(); // 推送成功会写 last_push_success_at，面板要跟着更新
     } catch (err) {
       setMessage(errorText(err));
     } finally {
