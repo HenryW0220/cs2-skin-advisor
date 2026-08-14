@@ -20,12 +20,18 @@
 // ⑤ **样本不够时不下结论**。回测里 15~20% 档的为负占比也才 61%，几十条样本的随机波动
 //    完全能盖过这个幅度。所以每一组都打印中位数和分位数，而不是只给一个平均值。
 import Database from "better-sqlite3";
-import { assertBaselineTable, loadBaseline } from "./market-baseline-store.mjs";
+import { assertBaselineTable, baselineProvenance, loadBaseline } from "./market-baseline-store.mjs";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
 // 第一个参数可以指定别的库文件。生产上不用传（默认就是容器里的路径），它存在是为了能拿
 // 构造好的样本库先把这个脚本跑通——在真实平仓出现之前，整个主体是没被执行过的代码，
 // 等 8-21 数据到了才发现写错就晚了。
-const db = new Database(process.argv[2] ?? "data/db.sqlite", { readonly: true });
+const args = parseScriptArgs({
+  name: "report-paper-trades",
+  usage: "node scripts/report-paper-trades.mjs [库文件]",
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 const HOUR_MS = 36e5;
 const DAY_MS = 24 * HOUR_MS;
 const HOLD_HORIZON_DAYS = 30; // 反事实对照的持有期，跟 lib/paper-trading.ts 的 MAX_HOLD_MS 一致
@@ -83,6 +89,9 @@ function priceNear(itemName, platform, atMs) {
 // 不在报告里顺手写库——报告写缓存的话，同一份报告不同时间跑会读到不同缓存，
 // 出了问题分不清是数据变了还是缓存脏了。
 assertBaselineTable(db);
+// 报告里每个"超额"都依赖基准，所以基准的口径版本要跟着报告一起印出来（迁移 024）。
+console.log(baselineProvenance(db));
+console.log("");
 const baselineCache = new Map(); // horizon -> Map(dayMs -> {median})
 const missingBaselineKeys = new Set(); // `${day}|${horizon}`，最后打印成一条 builder 命令
 
@@ -122,6 +131,7 @@ console.log(
 const records = [];
 let missingBaseline = 0;
 let missingCounterfactual = 0;
+const missingByHorizon = new Map(); // 窗口天数 -> 被剔除的仓位数
 
 for (const t of usable) {
   const openedMs = Date.parse(t.opened_at);
@@ -133,8 +143,15 @@ for (const t of usable) {
 
   // 大盘基准取同一持有窗口：开仓当天起、持有同样天数的全市场中位数收益。
   // 只有这样"超额"才是"同期同样拿着现金买别的会怎样"。
-  const base = marketReturn(openedMs, Math.max(1, Math.round(heldDays)));
-  if (base === null) missingBaseline += 1;
+  const horizon = Math.max(1, Math.round(heldDays));
+  const base = marketReturn(openedMs, horizon);
+  if (base === null) {
+    missingBaseline += 1;
+    // **按窗口留痕**：缺口如果系统性地只落在某一类窗口上（典型的是持有久的仓位——
+    // 窗口越长，回填要求的历史越长、能算出基准的日子越少），"剔除"就从随机损耗变成了
+    // 选择偏差，而只看一个总数是看不出来的。
+    missingByHorizon.set(horizon, (missingByHorizon.get(horizon) ?? 0) + 1);
+  }
 
   // 反事实：一直持到第 30 天。同样扣一次卖出手续费，跟实际收益可比。
   const price30 = priceNear(t.item_name, t.platform, openedMs + HOLD_HORIZON_DAYS * DAY_MS);
@@ -196,11 +213,19 @@ function describe(label, arr) {
 console.log("");
 console.log(`=== 收益（超额 = 实际收益 − 同期同持有天数的全市场中位数）===`);
 if (missingBaseline) {
-  console.log(`⚠️  ${missingBaseline} 笔取不到大盘基准，已从超额统计中剔除`);
-  const horizons = [...new Set([...missingBaselineKeys].map((k) => k.split("|")[1]))].sort(
+  console.log(
+    `⚠️  ${missingBaseline}/${usable.length} 笔取不到大盘基准，已从超额统计中剔除` +
+      `（占 ${((100 * missingBaseline) / usable.length).toFixed(1)}%）`
+  );
+  const byHorizon = [...missingByHorizon.entries()].sort((a, b) => a[0] - b[0]);
+  console.log(
+    `   按持有窗口分布：${byHorizon.map(([h, n]) => `${h} 天 ${n} 笔`).join("、")}` +
+      "（集中在长窗口的话，剔除就是选择偏差不是随机损耗，下面的超额要打折看）"
+  );
+  const horizons = [...new Set([...missingBaselineKeys].map((k) => Number(k.split("|")[1])))].sort(
     (a, b) => a - b
   );
-  console.log(`   缺的是这些窗口：${horizons.join(", ")} 天。补一下再看：`);
+  console.log(`   缺的 (日期, 窗口) 共 ${missingBaselineKeys.size} 组，涉及窗口：${horizons.join(", ")} 天。补一下再看：`);
   console.log(`   node scripts/build-market-baseline.mjs ${horizons.join(" ")}`);
 }
 console.log("口径                   | 样本数 | 中位数  |   p25   |   p75   | 为负占比 | 备注");

@@ -31,9 +31,15 @@
 // 比的是"此刻卖"vs"继续持有 N 天"的毛收益，两边都要扣一次手续费、差额上抵消。
 // 按小时重采样，跟 lib/signals/resample.ts 同口径。
 import Database from "better-sqlite3";
-import { assertBaselineTable, loadBaseline } from "./market-baseline-store.mjs";
+import { assertBaselineTable, baselineProvenance, loadBaseline } from "./market-baseline-store.mjs";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
-const db = new Database("data/db.sqlite", { readonly: true });
+const args = parseScriptArgs({
+  name: "build-sell-rule-baseline",
+  usage: "node scripts/build-sell-rule-baseline.mjs [库文件]",
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 const HOUR_MS = 36e5;
 const DAY_MS = 24 * HOUR_MS;
 const PLATFORM_PRIORITY = ["C5", "BUFF", "YOUPIN"];
@@ -131,6 +137,9 @@ if (baselineRows.size === 0) {
   console.log("market_baseline_daily 里还没有基准，先跑：node scripts/build-market-baseline.mjs");
   process.exit(0);
 }
+// v2 的全部阈值就是从这张表反推的，所以基准的口径版本必须跟着这份输出一起留下来（迁移 024）
+console.log(baselineProvenance(db));
+console.log("");
 const marketByDay = new Map([...baselineRows.entries()].map(([day, v]) => [day, v.median]));
 
 // ---------- 第二遍：按档位汇总超额收益 ----------
@@ -152,13 +161,19 @@ console.log(`参与统计的饰品：${itemsUsed} 个；大盘基准覆盖 ${mar
 console.log("");
 console.log(`口径：超额 = 该样本未来 ${HORIZON_DAYS} 天收益 − 当天全市场中位数。只看中位数，均值被重尾主导没有意义。`);
 console.log("");
-console.log("24h涨幅档  |  样本数 | 超额中位数 | 超额为负占比 | 非洗盘时超额 | 洗盘时超额");
-console.log("-----------|--------|-----------|-------------|-------------|------------");
+// 洗盘那两列**必须带各自的样本数**：中位数背后是 3 个样本还是 3000 个样本，
+// 读起来完全是两回事。v2 的"深回撤且低涨幅时明确不卖"就是从洗盘那一列反推的，
+// 而它在实盘上线 40 天一次都没触发过（HANDOFF ⑭）——要判断那是"罕见但合理"还是
+// "实盘判定跟回测反推不一致"，靠的就是这里的洗盘样本占比。
+console.log("24h涨幅档  |  样本数 | 超额中位数 | 超额为负占比 | 非洗盘时超额(n) | 洗盘时超额(n) | 洗盘占比");
+console.log("-----------|--------|-----------|-------------|----------------|--------------|--------");
 for (const [label] of BANDS) {
   const b = agg.get(label);
+  const share = b.all.length ? `${((100 * b.washout.length) / b.all.length).toFixed(2)}%` : "-";
   console.log(
     `${label.padEnd(10)} | ${String(b.all.length).padStart(6)} | ${fmt(median(b.all))} | ` +
-      `${fmt(pctNeg(b.all))} | ${fmt(median(b.noWashout))} | ${fmt(median(b.washout))}`
+      `${fmt(pctNeg(b.all))} | ${fmt(median(b.noWashout))}(${String(b.noWashout.length).padStart(6)}) | ` +
+      `${fmt(median(b.washout))}(${String(b.washout.length).padStart(5)}) | ${share.padStart(7)}`
   );
 }
 
