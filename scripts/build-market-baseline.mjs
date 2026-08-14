@@ -45,7 +45,8 @@ const horizons = args.horizons;
 const daily = args.booleans["--daily"];
 
 const db = new Database(resolveDbPath(args.dbPath));
-assertBaselineTable(db);
+// builder 是**写入方**：新开一版口径时表里还没有这一版的行，这是正常的
+assertBaselineTable(db, { requireCurrentVersion: false });
 
 const startedAt = Date.now();
 console.log(`窗口：${horizons.join(", ")} 天`);

@@ -43,17 +43,12 @@ const SETTLE_MS = 6 * HOUR_MS;
 // 就地重算等于把它们的依据抽走，那是"同一份数据被反复检视"的另一种形式。
 // 用指纹而不是手写版本号：手写的迟早有人忘了改，指纹是改了常量就自动变。
 //
-// ⚠️ **已知缺陷，还没修，修它要新开一版口径**（2026-08-14 发现）：
-// 下面 ensureBaselines 的定型检查是**逐小时** `break` 的，但写库是**整天**写的。
-// 后果是**卡在定型边界上的那一天会被写成半天，而且从此不再重算**（storedDays 认为它有了）。
-// 实测：生产库里窗口 7 天的 2026-08-06 只有 14 小时样本（4550/325），完整应是 24 小时；
-// 用完整数据重算得到 −2.38%，库里存的是 −2.14%。**每次回填的最后一天都有这个问题**
-// （8 个窗口各一天，858 行里 8 行）。
-// **为什么不顺手修**：修了会改变那些行的数字，按迁移 024 定的规矩，改变数字 = 新开一版
-// calc_version 并整体重算，旧行保留。那是一次要项目所有者拍板的动作（会牵动已经报出去的
-// +16.79% 等数字），不能在一次顺手提交里做掉。
-// **已经做的止血**：`--daily` 模式按"当天最后一小时是否定型"选日子，所以**往后不会再产生
-// 新的半天行**；存量那 8 行原样保留，等口径升版时一起重算。
+// ✅ **已修（2026-08-14），修法就是新开一版口径**：定型检查原来是逐小时 `break` 的，
+// 而写库是整天写的，于是卡在定型边界上的那天被写成半天且从此不再重算（storedDays 认为
+// 它已经有了）。实测旧版 b9645fa10 里窗口 7 天的 2026-08-06 只有 14 小时样本（4550/325），
+// 完整重算是 24 小时、中位数从 −2.14% 变成 −2.38%；八个窗口各一天。
+// 按迁移 024 的规矩处理：`dayCompleteness` 进指纹 → 新版本 b03672dc0 整体重算，
+// **旧行一行不动**，作废原因写进 market_baseline_meta.deprecated_reason（迁移 026）。
 // 注意：多数天的样本数不到 24 小时/饰品是**另一回事**（采集本身有缺口，同一小时两端都要有价
 // 才算一个样本），那是数据密度不是这个缺陷，别混。
 //
@@ -61,6 +56,10 @@ const SETTLE_MS = 6 * HOUR_MS;
 // 所以 script_sha 只记在 meta 里做取证，不参与指纹。反过来，任何改了数值口径的改动
 // （包括中位数在偶数样本上的取法）**必须**在这里显式登记，否则新旧两套会混进同一版。
 export const BASELINE_CALIBER = {
+  // 一天要**整天**都定型了才写。旧版 b9645fa10 是逐小时判定型、整天写库，于是卡在定型
+  // 边界上的那天被写成半天且从此不再重算（每个窗口各一天）。这一条进指纹是有意的：
+  // 它改变数字，按迁移 024 的规矩就必须是新的一版。
+  dayCompleteness: "whole-day-only",
   historyGateHours: "24*(horizon+14)",
   itemUniverse: "DISTINCT item_name FROM price_snapshots",
   medianRule: "even-count=mean-of-two-middles",
@@ -69,6 +68,22 @@ export const BASELINE_CALIBER = {
   platformPriority: PLATFORM_PRIORITY.join(","),
   resample: "hourly-last",
   settleHours: SETTLE_MS / HOUR_MS,
+};
+
+/**
+ * 已作废的口径版本，以及**作废的原因和影响量级**。
+ *
+ * 只标一个 deprecated 是不够的：将来有人翻到旧版本的数字，要能立刻知道它错在哪、错多少，
+ * 否则只会卡在"这一天为什么对不上"。所以这里连同复现方式一起写下来，并写进
+ * market_baseline_meta.deprecated_reason（迁移 026）。
+ */
+export const DEPRECATED_CALC_VERSIONS = {
+  b9645fa10:
+    "边界日半天数据：定型检查逐小时 break、写库却按整天写，导致每个窗口最后一天只用了" +
+    "当天前若干小时的样本且从此不再重算。实测窗口 7 天的 2026-08-06 只有 14 小时" +
+    "（4550/325，完整应为 24 小时），中位数 -2.14% 而完整重算是 -2.38%。" +
+    "八个窗口各有一天受影响（858 行里 8 行）。量级不影响任何已有结论" +
+    "（判据是 6.7%~12% 的成本线），但混着两种口径会让将来的复核先卡在对不上账。",
 };
 // 键排序后再序列化：指纹不能因为字段书写顺序变了就变
 export const BASELINE_CALIBER_JSON = JSON.stringify(
@@ -201,6 +216,17 @@ function upsertMeta(db) {
     stat.last_day,
     stat.rows
   );
+
+  // 把已知作废版本的原因写进 meta（迁移 026）。**只标 deprecated 是不够的**：
+  // 将来有人翻到旧版本的数字，要能立刻知道它错在哪、错多少，否则只会卡在"这天为什么对不上"。
+  const markDeprecated = db.prepare(
+    `UPDATE market_baseline_meta SET deprecated_reason = ?, deprecated_at = COALESCE(deprecated_at, datetime('now'))
+     WHERE calc_version = ? AND (deprecated_reason IS NULL OR deprecated_reason <> ?)`
+  );
+  for (const [version, reason] of Object.entries(DEPRECATED_CALC_VERSIONS)) {
+    if (version === BASELINE_CALC_VERSION) continue; // 当前版本不能标自己作废
+    markDeprecated.run(reason, version, reason);
+  }
 }
 
 /**
@@ -459,7 +485,7 @@ export function baselineProvenance(db, calcVersion = BASELINE_CALC_VERSION) {
  * 顺带挡住"口径改了但表里没有这一版"的情况——不挡的话 loadBaseline 会返回空 Map，
  * 报告脚本只会说"还没有基准，去跑 builder"，把**口径失配**说成**数据没到**。
  */
-export function assertBaselineTable(db) {
+export function assertBaselineTable(db, { requireCurrentVersion = true } = {}) {
   for (const name of ["market_baseline_daily", "market_baseline_meta"]) {
     const row = db
       .prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type='table' AND name = ?")
@@ -472,6 +498,10 @@ export function assertBaselineTable(db) {
   }
   const rows = db.prepare("SELECT COUNT(*) c FROM market_baseline_daily").get().c;
   if (!rows) return; // 空表是"还没回填"，交给调用方提示去跑 builder
+  // **写入方要豁免这一条**：新开一版口径时，表里当然还没有这一版的行——builder 正是来
+  // 创建它的。第一次升版就撞到了：守卫把 builder 自己挡在门外，于是那一版永远建不出来。
+  // 守卫要防的是**读取方**拿着新口径去读旧数据（那会静默返回空基准）。
+  if (!requireCurrentVersion) return;
   const mine = db
     .prepare("SELECT COUNT(*) c FROM market_baseline_daily WHERE calc_version = ?")
     .get(BASELINE_CALC_VERSION).c;

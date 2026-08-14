@@ -57,7 +57,28 @@ Write-Output ("设置：StartWhenAvailable={0} DisallowStartIfOnBatteries={1}" -
 
 # 改完立刻跑一次，别等到明天 21:00 才知道对不对。
 Start-ScheduledTask -TaskName $taskName
-Start-Sleep -Seconds 20
-$info = Get-ScheduledTaskInfo -TaskName $taskName
-Write-Output "试跑结果：LastTaskResult=$($info.LastTaskResult)（0 = 成功；-196608 = 脚本路径还是不对）"
+
+# **不能睡固定秒数就去读结果。** 第一次实跑（2026-08-14）睡 20 秒就读，拿到
+# LastTaskResult=267009 —— 那是 0x41301 SCHED_S_TASK_RUNNING「任务仍在运行」，
+# 不是失败码也不是成功码，而脚本把它当最终结果打了出来。**这跟今天记的其它几条同族：
+# 检查本身返回了一个看着像结论的中间态。** 改成轮询到任务真的不在运行了再读。
+$deadline = (Get-Date).AddMinutes(10)
+do {
+    Start-Sleep -Seconds 5
+    $info = Get-ScheduledTaskInfo -TaskName $taskName
+    $running = ($info.LastTaskResult -eq 267009)
+} while ($running -and (Get-Date) -lt $deadline)
+
+if ($running) {
+    Write-Output "试跑结果：10 分钟后仍在运行（LastTaskResult=267009 = 仍在执行）。下载大文件可能就是这么久，去看日志确认进度。"
+} else {
+    Write-Output "试跑结果：LastTaskResult=$($info.LastTaskResult)（0 = 成功；-196608 = 脚本路径还是不对）"
+}
+Write-Output "上次运行时间：$($info.LastRunTime)；下次计划：$($info.NextRunTime)"
 Write-Output "日志：$repoRoot\data\backups\pull-cloud-backup.log"
+Write-Output ""
+Write-Output "⚠️ LastTaskResult=0 只说明脚本跑完了没报错，**它是最弱的一项判据**。"
+Write-Output "   真正的判据是这两条："
+Write-Output "   ① 云端心跳 data/offsite-backup-heartbeat.json 的 pulledAt 前进到本次运行时刻；"
+Write-Output "   ② 日志里出现今天的「已拉取」而不是「已存在，跳过下载」——"
+Write-Output "      如果当天的备份文件被手工下载过，这一条今天验不了，要等下一个没被手工碰过的日子。"

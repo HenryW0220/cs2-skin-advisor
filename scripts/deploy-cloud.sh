@@ -44,11 +44,25 @@ warm_up() {
     return 0
   fi
 
-  echo "[deploy] 预热页面（重启后系统页缓存是冷的）"
+  # 预热的职责**只有暖缓存**，不是当健康检查——"服务活没活"上面那个就绪循环已经答过了。
+  # 原来这两个职责混在一起，后果是 curl 用同一个 `000` 同时表达"慢到超时"和"连接被拒"，
+  # 而这两件事要做的处理完全相反。2026-08-14 就撞上了：`/paper` 冷缓存实测 284 秒
+  # （记录里"首次 136 秒"已经翻倍），超时上限 300 秒只剩 16 秒余量——**再涨一点，预热就会
+  # 稳定失败，而失败的样子跟"服务没起来"一模一样，偏偏是在部署这个最需要相信监控的时刻**。
+  # 所以：① 超时放宽到 600 秒，慢就让它慢完，别把慢报成死；② 用 curl 的退出码把两种
+  # 失败区分开（28 = 超时，7 = 连接被拒），分别打不同的话；③ 预热失败一律不影响部署结果。
+  echo "[deploy] 预热页面（重启后系统页缓存是冷的；这一段只暖缓存，不作健康判据）"
   for path in /positions /watchlist /paper /anomalies /ledger; do
-    code=$(curl -s -o /dev/null -m 300 -w '%{http_code}|%{time_starttransfer}s' \
-      "${auth[@]}" "http://localhost:3210$path" || echo "超时")
-    echo "[deploy]   $path -> $code"
+    local out rc
+    out=$(curl -s -o /dev/null -m 600 -w '%{http_code}|%{time_starttransfer}s' \
+      "${auth[@]}" "http://localhost:3210$path")
+    rc=$?
+    case "$rc" in
+      0) echo "[deploy]   $path -> $out" ;;
+      28) echo "[deploy]   $path -> ⏱ 600 秒还没返回（是**慢**不是死，页面本身可能有 N+1，见 HANDOFF /paper 那条）" ;;
+      7) echo "[deploy]   $path -> ✗ 连接被拒（这才是服务的问题，去看容器日志）" ;;
+      *) echo "[deploy]   $path -> ✗ curl 退出码 $rc" ;;
+    esac
   done
 }
 
