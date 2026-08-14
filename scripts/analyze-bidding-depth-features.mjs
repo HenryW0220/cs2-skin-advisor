@@ -19,8 +19,14 @@
 //    不是观测时间，冷门品会留在很早的时间戳上——按真实时间做时序分析必须按
 //    captured_at 过滤掉 BIDDING_DATA_START 之前的行，否则会混进一批陈旧时间戳。
 import Database from "better-sqlite3";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
-const db = new Database("data/db.sqlite", { readonly: true });
+const args = parseScriptArgs({
+  name: "analyze-bidding-depth-features",
+  usage: "node scripts/analyze-bidding-depth-features.mjs [库文件]",
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 
 const HOUR_MS = 3600 * 1000;
 const DAY_MS = 24 * HOUR_MS;

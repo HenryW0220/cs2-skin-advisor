@@ -34,8 +34,14 @@
 // bidSpread    9/16、p=0.402，REPORT-bidding-depth-features.md 写的是"别再试了"。
 //              样本只有 16 个饰品，本来就在统计功效的边缘。
 import Database from "better-sqlite3";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
-const db = new Database(process.argv[2] ?? "data/db.sqlite", { readonly: true });
+const args = parseScriptArgs({
+  name: "recheck-degenerate-features",
+  usage: "node scripts/recheck-degenerate-features.mjs [库文件]",
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 
 const PLATFORM_PRIORITY = ["C5", "BUFF", "YOUPIN"];
 const HOUR_MS = 3600 * 1000;

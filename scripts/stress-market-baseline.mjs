@@ -34,13 +34,22 @@
 //   RSS 峰值 76.3MiB，仍然远离内存上限——这一段从头到尾都不是内存问题。
 // **结论：真实工作负载已经够用了；最坏场景要治只有加 captured_at 打头的索引。**
 import Database from "better-sqlite3";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
-const db = new Database(process.argv[2] ?? "data/db.sqlite", { readonly: true });
+const args = parseScriptArgs({
+  name: "stress-market-baseline",
+  usage: "node scripts/stress-market-baseline.mjs [库文件] [窗口数]",
+  positionals: [
+    { name: "dbPath", label: "库文件", default: null },
+    { name: "nWindows", label: "窗口数", default: "20" },
+  ],
+});
+const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 const HOUR_MS = 36e5;
 const DAY_MS = 24 * HOUR_MS;
 const PRICE_TOLERANCE_MS = 6 * HOUR_MS;
 const MIN_MARKET_SAMPLES = 20;
-const N_WINDOWS = Number(process.argv[3] ?? 20);
+const N_WINDOWS = Number(args.nWindows);
 
 const median = (a) => {
   if (!a.length) return NaN;

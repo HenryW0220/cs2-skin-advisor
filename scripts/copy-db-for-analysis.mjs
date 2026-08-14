@@ -11,14 +11,20 @@
 // 用的是 SQLite 的在线备份 API（跟 scripts/backup-db.sh 同一套），不停容器、不阻塞写入。
 import Database from "better-sqlite3";
 import { statSync } from "node:fs";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
-const target = process.argv[2];
+const args = parseScriptArgs({
+  name: "copy-db-for-analysis",
+  usage: "node scripts/copy-db-for-analysis.mjs <副本路径>",
+  positionals: [{ name: "target", label: "副本路径", default: null }],
+});
+const target = args.target;
 if (!target) {
   console.error("用法：node scripts/copy-db-for-analysis.mjs <目标路径>");
   process.exit(1);
 }
 
-const db = new Database(process.env.CS2_DB_PATH ?? "data/db.sqlite", { readonly: true });
+const db = new Database(resolveDbPath(null), { readonly: true });
 const startedAt = Date.now();
 await db.backup(target);
 db.close();

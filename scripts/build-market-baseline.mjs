@@ -17,18 +17,28 @@
 //   node scripts/merge-market-baseline.mjs /tmp/analysis.sqlite     # 一次短写事务合并回来
 // 只补当天那一个窗口（日常增量）时数据量很小，直接对生产库跑没问题。
 import Database from "better-sqlite3";
-import { assertBaselineTable, ensureBaselines } from "./market-baseline-store.mjs";
+import {
+  assertBaselineTable,
+  baselineProvenance,
+  BASELINE_CALC_VERSION,
+  ensureBaselines,
+} from "./market-baseline-store.mjs";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
-const argv = process.argv.slice(2);
-const throttleIdx = argv.indexOf("--throttle-ms");
-const throttleMs = throttleIdx >= 0 ? Number(argv[throttleIdx + 1]) || 0 : 0;
-const args = argv
-  .filter((a, i) => i !== throttleIdx && i !== throttleIdx + 1)
-  .map(Number)
-  .filter((n) => Number.isFinite(n) && n > 0);
-const horizons = args.length ? args : [7];
+// 原来这里是手写的 indexOf + filter，**没传 --throttle-ms 时会静默吃掉第一个窗口参数**
+// （indexOf 返回 −1，`i !== throttleIdx + 1` 退化成 `i !== 0`）：`… 8 9 10 11 12 13 16`
+// 实际只算了 9 起的六个，而且照样打印"窗口：9, 10, …"、照样成功退出。
+// 现在统一走 scripts/script-args.mjs：不认识的参数直接报错退出 + 抬头回显实参。
+const args = parseScriptArgs({
+  name: "build-market-baseline",
+  usage: "node scripts/build-market-baseline.mjs [窗口天数…] [--throttle-ms N]",
+  values: { "--throttle-ms": { parse: Number, default: 0, label: "让路毫秒" } },
+  restNumbers: { name: "horizons", default: [7], label: "窗口天数" },
+});
+const throttleMs = args.values["--throttle-ms"];
+const horizons = args.horizons;
 
-const db = new Database(process.env.CS2_DB_PATH ?? "data/db.sqlite");
+const db = new Database(resolveDbPath(args.dbPath));
 assertBaselineTable(db);
 
 const startedAt = Date.now();
@@ -41,12 +51,14 @@ for (const horizon of horizons) {
     .prepare(
       `SELECT COUNT(*) days, MIN(day) first_day, MAX(day) last_day,
               ROUND(AVG(item_count)) avg_items
-       FROM market_baseline_daily WHERE horizon_days = ?`
+       FROM market_baseline_daily WHERE horizon_days = ? AND calc_version = ?`
     )
-    .get(horizon);
+    .get(horizon, BASELINE_CALC_VERSION);
   console.log(
     `窗口 ${horizon} 天：库里共 ${row.days} 天（${row.first_day ?? "-"} ~ ${row.last_day ?? "-"}），` +
       `平均每天 ${row.avg_items ?? 0} 个饰品参与，本次新增 ${written[horizon] ?? 0} 天`
   );
 }
+console.log("");
+console.log(baselineProvenance(db));
 console.log(`耗时 ${((Date.now() - startedAt) / 1000).toFixed(1)} 秒`);

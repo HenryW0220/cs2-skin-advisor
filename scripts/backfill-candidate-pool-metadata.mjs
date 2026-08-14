@@ -8,6 +8,7 @@
 // 同一份 ByMykel 目录，这里重新拉一次是为了拿到 backfill-candidate-pool.mjs
 // 当时没保留的 collection/crate 字段（那边只存了 rarity 到 market_candidate_pool）。
 import Database from "better-sqlite3";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
 const RARITY_RANK = [
   ["rarity_common", 1],
@@ -25,7 +26,12 @@ function rarityRankOf(rarityId) {
   return hit ? hit[1] : null;
 }
 
-const db = new Database(new URL("../data/db.sqlite", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
+const args = parseScriptArgs({
+  name: "backfill-candidate-pool-metadata",
+  usage: "node scripts/backfill-candidate-pool-metadata.mjs [库文件]",
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const db = new Database(resolveDbPath(args.dbPath));
 
 async function main() {
   const poolItems = db.prepare("SELECT item_name FROM market_candidate_pool").all().map((r) => r.item_name);

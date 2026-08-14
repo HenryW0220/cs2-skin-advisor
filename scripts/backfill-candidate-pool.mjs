@@ -14,6 +14,7 @@
 // 逻辑一致）没有触发限流。这是一次性回填，不接入每小时同步，不影响生产采集器。
 import Database from "better-sqlite3";
 import { readFileSync } from "node:fs";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
 const envText = readFileSync(new URL("../.env.local", import.meta.url), "utf-8");
 for (const line of envText.split("\n")) {
@@ -23,11 +24,16 @@ for (const line of envText.split("\n")) {
 
 const BASE_URL = process.env.STEAMDT_API_BASE_URL;
 const APP_KEY = process.env.STEAMDT_APP_KEY;
-const TARGET_SIZE = Number(process.argv[2] ?? 500);
+const args = parseScriptArgs({
+  name: "backfill-candidate-pool",
+  usage: "node scripts/backfill-candidate-pool.mjs [候选池目标条数]",
+  positionals: [{ name: "targetSize", label: "候选池目标条数", default: "500" }],
+});
+const TARGET_SIZE = Number(args.targetSize);
 const REQUEST_DELAY_MS = 250;
 const FALLBACK_PLATFORM = "C5";
 
-const db = new Database(new URL("../data/db.sqlite", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
+const db = new Database(resolveDbPath(null));
 // 独立脚本不走 lib/db/client.ts 的启动期迁移，自己确保表存在（跟 015 迁移的 DDL 保持一致）。
 db.exec(`CREATE TABLE IF NOT EXISTS market_candidate_pool (
   item_name TEXT PRIMARY KEY,

@@ -18,8 +18,14 @@
 // 2. 样本量小（141 个标注窗口，测试期只占约 3 周），指标本身噪声会比较大。
 // 3. 求购深度数据（bidding_price/bidding_count）2026-07-20 才开始入库，这版还用不上。
 import Database from "better-sqlite3";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
-const db = new Database("data/db.sqlite", { readonly: true });
+const args = parseScriptArgs({
+  name: "build-prediction-baseline",
+  usage: "node scripts/build-prediction-baseline.mjs [库文件]",
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 
 const HOUR_MS = 3600 * 1000;
 const DAY_MS = 24 * HOUR_MS;

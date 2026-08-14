@@ -11,6 +11,7 @@
 // 项目所有者的小道消息，价格数据里没有。由 AI 按价格形态代判等于用模型的特征生成
 // 模型的标签，是循环论证，跑出来的 AUC 会虚高且事后无法察觉（见 HANDOFF 踩坑 35）。
 import Database from "better-sqlite3";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
 // 顺序就是审核优先级：联动两类排前面（2026-08-13 起，它们是"要不要给 group_linkage
 // 开推送"这个决定的唯一输入），后面三类是老的稀缺类型。
@@ -25,19 +26,23 @@ const SCARCE_METRICS = [
 // --sample N：随机抽 N 条（用于估"值得看的比例"，不用等 200 多条全审完）。
 // --seed S：抽样种子，默认 1。**固定种子是有意的**——同一个种子每次抽到同一批，
 // 审到一半重跑清单不会换一组样本，否则估出来的比例是有偏的（换到不喜欢的就重抽）。
-const argv = process.argv.slice(2);
-const readArg = (name) => {
-  const i = argv.indexOf(name);
-  return i >= 0 ? argv[i + 1] : null;
-};
-const SAMPLE_SIZE = Number(readArg("--sample")) || 0;
-const SAMPLE_SEED = Number(readArg("--seed")) || 1;
+const args = parseScriptArgs({
+  name: "list-scarce-anomalies",
+  usage: "node scripts/list-scarce-anomalies.mjs [--sample N] [--seed S] [库文件]",
+  values: {
+    "--sample": { parse: Number, default: 0, label: "抽样条数" },
+    "--seed": { parse: Number, default: 1, label: "抽样种子" },
+  },
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const SAMPLE_SIZE = args.values["--sample"];
+const SAMPLE_SEED = args.values["--seed"];
 // 事件前后各看多久：前 7 天给"异动之前是什么状态"，后 14 天覆盖 T+7 锁定期满之后的走势，
 // 因为 2026-07-15 新规下买入方 7 天内没法卖，第 7 天之后的价格才是真正能兑现的那个价。
 const DAYS_BEFORE = 7;
 const DAYS_AFTER = 14;
 
-const db = new Database("data/db.sqlite", { readonly: true });
+const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 
 const esc = (s) => String(s ?? "").replaceAll("|", "\\|");
 const pct = (a, b) => (a === null || b === null || !b ? "—" : `${(((a - b) / b) * 100).toFixed(1)}%`);

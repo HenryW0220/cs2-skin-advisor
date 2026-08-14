@@ -6,8 +6,14 @@
 // 聚类只看形态特征（涨速/波动/回撤），全程不使用剧本先验；剧本名字只在人工解读时对号入座。
 // 结论写进 REPORT-manipulation-playbook-stages.md，喂 C 阶段（吸货期指纹=买点特征）和 D1（出货期指纹=逃顶信号）。
 import Database from "better-sqlite3";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
-const db = new Database("data/db.sqlite", { readonly: true });
+const args = parseScriptArgs({
+  name: "analyze-playbook-stages",
+  usage: "node scripts/analyze-playbook-stages.mjs [库文件]",
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 
 const HOUR_MS = 3600 * 1000;
 const DAY_MS = 24 * HOUR_MS;

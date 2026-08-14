@@ -14,8 +14,14 @@
 // 删掉趋势项之后的新 score 就是"只剩 RSI 分量"。脚本会校验库里每个 score 都在这 9 个
 // 值里，出现意外值就报错退出——那说明反解前提已经不成立（比如有人加了新的打分项）。
 import Database from "better-sqlite3";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
-const db = new Database(process.argv[2] ?? "data/db.sqlite", { readonly: true });
+const args = parseScriptArgs({
+  name: "preview-trend-removal-diff",
+  usage: "node scripts/preview-trend-removal-diff.mjs [库文件]",
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 
 // 跟 lib/rules/evaluate.ts 保持一致
 const SCORE_SELL_THRESHOLD = -40;

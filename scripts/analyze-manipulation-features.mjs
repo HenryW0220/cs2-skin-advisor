@@ -7,8 +7,14 @@
 // 日期（外部事件，单独统计不进正负类）；其余时段是负类（平时）。
 // 数据是每小时一条的 price_snapshots（K线回填 + 定时同步）。
 import Database from "better-sqlite3";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
-const db = new Database("data/db.sqlite", { readonly: true });
+const args = parseScriptArgs({
+  name: "analyze-manipulation-features",
+  usage: "node scripts/analyze-manipulation-features.mjs [库文件]",
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 
 const PLATFORM_PRIORITY = ["C5", "BUFF", "YOUPIN"];
 const HOUR_MS = 3600 * 1000;

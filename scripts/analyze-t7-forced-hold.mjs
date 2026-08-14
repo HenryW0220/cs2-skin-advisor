@@ -8,10 +8,14 @@
 // 拉升时手里的货早已过锁定期、出一小部分就回本，所以 T+7 并不约束庄家的节奏，
 // 不能指望新规让快盘消失——这个模拟结果对新规时代大概率仍然成立。
 import Database from "better-sqlite3";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
-const db = new Database(new URL("../data/db.sqlite", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"), {
-  readonly: true,
+const args = parseScriptArgs({
+  name: "analyze-t7-forced-hold",
+  usage: "node scripts/analyze-t7-forced-hold.mjs [库文件]",
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
 });
+const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 
 const DAY = 24 * 3600 * 1000;
 const FEE_THRESHOLD = 0.02; // C5/悠悠手续费约 1% + 滑点余量，净赚门槛按 2% 算

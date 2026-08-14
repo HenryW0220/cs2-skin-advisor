@@ -16,14 +16,21 @@
 //      （¥5-20 是 56%、¥20-100 是 99%、¥100+ 是 95%），低价品的"异常"是报价精度的机械结果。
 //      lib/anomaly-scan.ts 的 MIN_PRICE_FOR_ANOMALY_SCAN 已同步提到 5，从源头止血。
 import Database from "better-sqlite3";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
 const MIN_PRICE = 5;
 const NOTE_PREFIX = "机械归档";
 
-const apply = process.argv.includes("--apply");
-const revert = process.argv.includes("--revert");
+const args = parseScriptArgs({
+  name: "archive-unreviewable-anomalies",
+  usage: "node scripts/archive-unreviewable-anomalies.mjs [--apply] [--revert] [库文件]",
+  booleans: ["--apply", "--revert"],
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const apply = args.booleans["--apply"];
+const revert = args.booleans["--revert"];
 
-const db = new Database("data/db.sqlite");
+const db = new Database(resolveDbPath(args.dbPath));
 
 if (revert) {
   const stmt = db.prepare(

@@ -23,8 +23,14 @@
 // 修复后数字依然被少数几个极端赢家主导，"模型打赢基准"方向可信，具体打赢多少
 // 现在样本量下没有统计意义。
 import Database from "better-sqlite3";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
-const db = new Database("data/db.sqlite", { readonly: true });
+const args = parseScriptArgs({
+  name: "build-t7-actionable-baseline",
+  usage: "node scripts/build-t7-actionable-baseline.mjs [库文件]",
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 
 const HOUR_MS = 3600 * 1000;
 const PLATFORM_PRIORITY = ["C5", "BUFF", "YOUPIN"];

@@ -12,7 +12,13 @@
 // **只读，不写库、不碰 item_metadata**——要不要把这个分组落进生产数据是另一个决定，
 // 因为 lib/anomaly-scan.ts 的同收藏品联动预警读的就是那一列，改了会直接影响线上预警。
 import Database from "better-sqlite3";
-const db = new Database("data/db.sqlite", { readonly: true });
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
+const args = parseScriptArgs({
+  name: "analyze-group-comove",
+  usage: "node scripts/analyze-group-comove.mjs [库文件]",
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 const HOUR_MS = 36e5, DAY_MS = 24 * HOUR_MS;
 
 function groupOf(name) {

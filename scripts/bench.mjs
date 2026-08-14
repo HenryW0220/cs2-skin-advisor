@@ -12,8 +12,14 @@
 //
 // **只读打开**：原版是读写模式开生产库的，跑一个测量脚本没有任何理由持有写锁。
 import Database from "better-sqlite3";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
-const db = new Database(process.argv[2] ?? "data/db.sqlite", { readonly: true });
+const args = parseScriptArgs({
+  name: "bench",
+  usage: "node scripts/bench.mjs [库文件]",
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 
 const item = db.prepare("SELECT item_name FROM inventory WHERE buy_price > 0 LIMIT 1").get();
 if (!item) {

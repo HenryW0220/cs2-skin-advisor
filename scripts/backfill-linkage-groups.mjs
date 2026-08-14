@@ -15,10 +15,17 @@
 // 分组规则跟 lib/item-metadata-groups.ts 保持一致；那边是生产代码（新同步的饰品走那条路），
 // 这个脚本只处理存量。两处都改的时候要一起改——这是刻意的重复，因为 node 跑不了 lib 的 .ts。
 import Database from "better-sqlite3";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
-const apply = process.argv.includes("--apply");
-const revert = process.argv.includes("--revert");
-const db = new Database("data/db.sqlite");
+const args = parseScriptArgs({
+  name: "backfill-linkage-groups",
+  usage: "node scripts/backfill-linkage-groups.mjs [--apply] [--revert] [库文件]",
+  booleans: ["--apply", "--revert"],
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const apply = args.booleans["--apply"];
+const revert = args.booleans["--revert"];
+const db = new Database(resolveDbPath(args.dbPath));
 
 const NON_AGENT_TYPE_PREFIXES = [
   "Music Kit |",

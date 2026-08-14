@@ -37,8 +37,14 @@
 // 已被两条独立路径验证）放进**同一个** AUC 计算里。RSI 和趋势要跟它比，不跟 0.744 比。
 // 没有同任务参照线的效应量判断是没有意义的。
 import Database from "better-sqlite3";
+import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
-const db = new Database(process.argv[2] ?? "data/db.sqlite", { readonly: true });
+const args = parseScriptArgs({
+  name: "build-rsi-trend-baseline",
+  usage: "node scripts/build-rsi-trend-baseline.mjs [库文件]",
+  positionals: [{ name: "dbPath", label: "库文件", default: null }],
+});
+const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 
 const HOUR_MS = 36e5;
 const DAY_MS = 24 * HOUR_MS;
