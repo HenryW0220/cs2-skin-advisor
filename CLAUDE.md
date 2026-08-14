@@ -127,7 +127,10 @@ STEAMDT_API_BASE_URL=https://open.steamdt.com
 # NVIDIA NIM（免费 LLM）
 NVIDIA_API_KEY=
 NVIDIA_API_BASE_URL=https://integrate.api.nvidia.com/v1
-NVIDIA_MODEL=deepseek-ai/deepseek-v4-flash
+# 用带日期的具体版本，别用不带日期的别名：2026-08-14 实测 deepseek-ai/deepseek-v4-flash
+# 这个别名已被 NIM 下线，调用只返回 HTTP 410，而页面上表现为"AI 理由不显示"，没有任何报错。
+# 当前还活着的 id 用 `curl -H "Authorization: Bearer $NVIDIA_API_KEY" $NVIDIA_API_BASE_URL/models` 查。
+NVIDIA_MODEL=deepseek-ai/deepseek-v4-flash-0731
 
 # Steam 官方 Web API（用来导入库存，库存接口本身不需要 key，只在确认账号身份时用到 ResolveVanityURL）
 STEAM_API_KEY=
