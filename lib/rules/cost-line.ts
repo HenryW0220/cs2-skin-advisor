@@ -38,28 +38,39 @@ export interface ISignalEvidence {
 }
 
 /**
- * 2026-08-13 用 714 个饰品 / 109 天重跑的结果（scripts/build-rsi-trend-baseline.mjs），
- * 跟 2026-08-03 首次回算（99 天）一致。小时尺度就是线上实际在用的口径。
+ * 2026-08-15 重跑（scripts/build-rsi-trend-baseline.mjs，714 个饰品 / 111 天）。
+ * 小时尺度就是线上实际在用的口径。
+ *
+ * ⚠️ **这一版的数字变动来自「口径统一」，不是结论变更。**
+ * 8-15 查出该脚本此前**自己算大盘基准**，而 build-sell-rule-baseline.mjs 早在 8-13 就改成读
+ * 物化表了，两边在"整天定型门槛"和"偶数样本的中位数取法"上分了岔。**改之前先量过**
+ * （scripts/compare-rsi-baseline-caliber.mjs）：111 天共同覆盖里 60 天完全相同、Δ 中位数
+ * 0.000pp、p5~p95 只有 ±0.08pp，|Δ| 最大 1.737pp 且全部集中在 04-20~04-24（那几天自算版
+ * 样本数少一个数量级，正是"未定型整天照算"这个缺陷的现场）。各档离 6.7% 成本线约 6pp，
+ * 移不过去 ⇒ 结论稳健。实际变动：超买 -0.96%→-0.99%、-3.57%→-3.67%；超卖 +0.61%→+0.62%、
+ * +0.37%→+0.40%，全部在 0.1pp 以内。**现在两个脚本共用同一份物化基准。**
+ *
+ * signTestP 记 0.0001 表示"小于显示精度"——脚本按 4 位小数打印，实际输出是 0.0000。
  *
  * 均线趋势那两档不在这里，因为它们已经从规则引擎删掉了——实测方向是反的
- * （配对检验 587/713 个饰品走弱之后反而更好，p=0.0000）。
+ * （配对检验 586/713 个饰品走弱之后反而更好，差距中位 +1.75%，p=0.0000）。
  */
 export const SIGNAL_EVIDENCE: Record<ISignalKey, ISignalEvidence> = {
   rsi_overbought: {
     key: "rsi_overbought",
     label: "RSI 超买",
-    excess7d: -0.0096,
-    excess7dDaily: -0.0357,
-    negativeShare: 0.5631,
+    excess7d: -0.0099,
+    excess7dDaily: -0.0367,
+    negativeShare: 0.5654,
     itemsTested: 701,
     signTestP: 0.0001,
   },
   rsi_oversold: {
     key: "rsi_oversold",
     label: "RSI 超卖",
-    excess7d: 0.0061,
-    excess7dDaily: 0.0037,
-    negativeShare: 0.4548,
+    excess7d: 0.0062,
+    excess7dDaily: 0.004,
+    negativeShare: 0.4538,
     itemsTested: 698,
     signTestP: 0.0001,
   },

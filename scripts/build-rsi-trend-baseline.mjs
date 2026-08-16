@@ -6,23 +6,24 @@
 // 要回答的问题：v1 规则引擎（lib/rules/evaluate.ts）的两个主要打分来源——RSI 超买/超卖
 // （±30）和均线趋势走强/走弱（+15/−25）——**从来没有任何回测支撑**，权重是当初拍的经验值
 // （HYPOTHESES.md §2.2）。成交量那一项已经查明是死信号并删除了，剩下这两项是 v1 的全部。
-// ⚠️ **2026-08-15 更正：下面这句"完全一致的口径"已经不成立了，别照着它引用。**
-// 写这句的时候（8-03）确实一致——那时两个脚本都是**各自在脚本里现算**大盘基准。
+// ---- 口径分岔已修复（2026-08-15）。这段留着，因为它记录的是一次真实的失效模式 ----
+// 8-03 写下"完全一致的口径"时确实一致——那时两个脚本都**各自在脚本里现算**大盘基准。
 // 但 8-13/8-14 之后 `build-sell-rule-baseline.mjs` 改成读**物化表**（迁移 023/024），
-// 而这个脚本**至今还是自己算**，于是两边在两处分了岔：
-//   ① **定型/整天门槛**：物化表口径 `dayCompleteness=whole-day-only` + `settleHours=6`
-//      ——一天要整天定型了才算数；这个脚本**没有任何定型逻辑**，边界日会用半天数据参与。
-//      **这正是 b9645fa10 → b03672dc0 那次升版要修的缺陷**（实测那一天中位数 −2.14% → −2.38%）。
-//   ② **中位数在偶数样本上的取法**：物化表是 `mean-of-two-middles`，这里是 `s[floor(n/2)]`。
-// 其余（参考平台优先级、每饰品 200 条快照下限、24×(窗口+14) 历史门槛、每天 20 条样本下限、
-// 按小时重采样）仍然一致。
-// **影响量级没测过**：本脚本的数字（±0.5% ~ −3.57%）直接写进了 `lib/rules/cost-line.ts` 的
-// SIGNAL_EVIDENCE，而那份数据在页面和 LLM 提示词里驱动"不可行动"标注。上一次同类差异只
-// 移动了 0.24pp / 每窗口 1 天，**大概率不影响任何结论，但目前是「没量过」不是「已确认无影响」。**
-// 要修的话不是改这里的常量，是让它也读物化表——那会改变已发布的数字，属于要拍板的动作。
-// 这条属于 HANDOFF 第四节 0.5「生产与回测必须共用同一份定义」那个待办的同族。
+// 而这个脚本还在自己算，于是两边悄悄分了岔：
+//   ① **定型/整天门槛**：物化表有 `dayCompleteness=whole-day-only` + `settleHours=6`，
+//      自算版**没有任何定型逻辑**，边界日会用半天数据参与——**正是 b9645fa10 → b03672dc0
+//      那次升版要修的缺陷**；
+//   ② **中位数在偶数样本上的取法**：`mean-of-two-middles` vs `s[floor(n/2)]`。
+// **而那句注释还在，读的人会以为已经核对过了——一句失效的注释比没有注释更危险。**
 //
-// 这个脚本用跟 build-sell-rule-baseline.mjs **完全一致的口径**给它们做同样的检验：
+// **先量后修**（`scripts/compare-rsi-baseline-caliber.mjs`，只量不修那一版）：
+// 111 天共同覆盖里 **60 天完全相同**、Δ 中位数 **0.000pp**、p5~p95 只有 **±0.08pp**；
+// |Δ| 最大 **1.737pp** 且**全部集中在 04-20~04-24**，那几天自算版样本数少一个数量级
+// （04-23：1385 vs 6835）——**离群不是随机噪声，正是"未定型整天照算"这个缺陷的现场**。
+// 各档离 6.7% 成本线约 6pp，1.737pp 移不过去 ⇒ **结论稳健**，所以本脚本现已改成读物化表。
+// **改完 SIGNAL_EVIDENCE 的数字会小幅变动，那来自口径统一，不是结论变更。**
+//
+// 现在这个脚本跟 build-sell-rule-baseline.mjs **共用同一份物化基准**，做同样的检验：
 //   超额 = 某时点的"未来 7 天收益 − 当天全市场中位数收益"
 // 只把分档维度从「24h 涨幅」换成「RSI 档位」和「趋势状态」。
 //
@@ -53,13 +54,37 @@
 // 已被两条独立路径验证）放进**同一个** AUC 计算里。RSI 和趋势要跟它比，不跟 0.744 比。
 // 没有同任务参照线的效应量判断是没有意义的。
 import Database from "better-sqlite3";
+import {
+  assertBaselineCoverage,
+  assertBaselineTable,
+  baselineProvenance,
+  loadBaseline,
+} from "./market-baseline-store.mjs";
 import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
+// ---- --since：régime 复核用，**默认不启用**（2026-08-15）----
+// 加这个参数和"改成读物化表"是同一次动作，但**故意分成两步用**：
+// 这一次只统一口径、**区间不变**再发布数字；起点选择留给单独一次 `--since 2026-07-01` 的跑法，
+// 两组数字并排放进报告。**不这么分的话就是同时改两个变量（口径 + 区间），
+// 下次有人问"数字为什么变了"就说不清是哪一个引起的。**
+//
+// 为什么值得跑那一次：`report-regime-boundaries.mjs` 查出 2026-04~06 有一批**未解释**的
+// régime 台阶（平台数 1↔5 反复跳），而本脚本是**跨整段区间聚合**的。
+// 这跟 `build-sell-rule-baseline.mjs` 的 `--since` 复核是**同一个问题的两个实例**。
+// 判读方式也一样：两组差不多 ⇒ SIGNAL_EVIDENCE 不受那段影响、可信度上升；
+// 差很多 ⇒ 全区间的幅度降级为只看方向。
 const args = parseScriptArgs({
   name: "build-rsi-trend-baseline",
-  usage: "node scripts/build-rsi-trend-baseline.mjs [库文件]",
+  usage: "node scripts/build-rsi-trend-baseline.mjs [库文件] [--since YYYY-MM-DD]",
+  values: { "--since": { parse: String, default: "", label: "只用这个日期之后的样本" } },
   positionals: [{ name: "dbPath", label: "库文件", default: null }],
 });
+const sinceDay = args.values["--since"];
+const sinceMs = sinceDay ? Date.parse(`${sinceDay}T00:00:00.000Z`) : null;
+if (sinceDay && !Number.isFinite(sinceMs)) {
+  console.error(`✗ --since 的值 "${sinceDay}" 不是合法日期（要 YYYY-MM-DD）`);
+  process.exit(1);
+}
 const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 
 const HOUR_MS = 36e5;
@@ -68,7 +93,8 @@ const PLATFORM_PRIORITY = ["C5", "BUFF", "YOUPIN"];
 const HORIZON_DAYS = 7;
 const MIN_ROWS = 200; // 跟 build-sell-rule-baseline.mjs 一致
 const MIN_SAMPLES_PER_ITEM = 12; // 至少半天样本，太少的饰品 AUC 噪声压过信号
-const MIN_MARKET_SAMPLES = 20;
+// MIN_MARKET_SAMPLES 已随"改读物化表"移除——每天样本下限现在由物化表口径 minSamplesPerDay=20 统一持有，
+// 在这里再留一份就是又一处"两边各写一份定义"（HANDOFF 第四节 0.5）。
 
 // 生产阈值，跟 lib/rules/evaluate.ts 保持一致
 const RSI_OVERBOUGHT = 70;
@@ -213,15 +239,24 @@ const RSI_BANDS = [
 ];
 const rsiBandOf = (v) => (v === null ? null : RSI_BANDS.find(([, lo, hi]) => v >= lo && v < hi)?.[0] ?? null);
 
-// ================= 第一遍：只为算大盘基准 =================
+// ================= 第一遍：定出参与统计的饰品，并收齐要用到的日期 =================
 // **刻意分两遍读库**：一次性把所有饰品的全部样本留在堆里，就是踩坑 28（OOM）的形状——
 // 那次是 338 个饰品 × 完整历史 ≈ 440MB 撑爆 1 核 1GB 机器的 Node 堆。这里 700+ 个饰品
-// × 约 2400 小时 × 多个指标字段只会更糟。第一遍只留"每天的前瞻收益数组"（几十万个数，
-// 十几 MB），第二遍逐个饰品算完立刻丢，堆里任何时刻只有一个饰品的数据。
-// 代价是每个饰品的序列读两次，换来的是内存从 O(饰品数 × 历史长度) 变成 O(1 个饰品)。
+// × 约 2400 小时 × 多个指标字段只会更糟。第二遍逐个饰品算完立刻丢，堆里任何时刻只有
+// 一个饰品的数据。代价是每个饰品的序列读两次。
+//
+// **2026-08-15：大盘基准改成读物化表，不再在这里现算。**
+// 原来这一遍要攒 `fwdByDay`（每天一个前瞻收益数组）才能算中位数，现在只需要收**日期集合**
+// 交给 assertBaselineCoverage，内存和耗时都降了一档。
+// 改的理由见抬头：口径分岔（自算版没有定型/整天门槛、偶数中位数取法也不同）。
+// **改之前先量过**（`scripts/compare-rsi-baseline-caliber.mjs`）：111 天共同覆盖里 60 天完全相同、
+// Δ 中位数 0.000pp、p5~p95 只有 ±0.08pp；|Δ| 最大 1.737pp 且**全部集中在 04-20~04-24**，
+// 那几天自算版的样本数少一个数量级（04-23 是 1385 vs 6835）——**离群不是随机噪声，
+// 正是"未定型整天照算"这个缺陷的现场**。1.737pp 对各档离成本线约 6pp 的距离移不过去，
+// 所以这次统一口径**是口径统一不是结论变更**。
 const items = db.prepare("SELECT DISTINCT item_name FROM price_snapshots").all().map((r) => r.item_name);
 
-const fwdByDay = new Map();
+const requiredDays = new Set();
 const usableItems = [];
 
 for (const item of items) {
@@ -233,31 +268,52 @@ for (const item of items) {
 
   const hourIndex = new Map(series.map(([h], i) => [h, i]));
   for (let i = 48; i < series.length; i++) {
-    const [ts, price] = series[i];
-    const futureIdx = hourIndex.get(ts + HORIZON_DAYS * DAY_MS);
-    if (futureIdx === undefined) continue;
-    const fwd = (series[futureIdx][1] - price) / price;
-    const day = Math.floor(ts / DAY_MS) * DAY_MS;
-    if (!fwdByDay.has(day)) fwdByDay.set(day, []);
-    fwdByDay.get(day).push(fwd);
+    const [ts] = series[i];
+    if (sinceMs !== null && ts < sinceMs) continue;
+    if (hourIndex.get(ts + HORIZON_DAYS * DAY_MS) === undefined) continue;
+    requiredDays.add(Math.floor(ts / DAY_MS) * DAY_MS);
   }
 }
 
-const marketByDay = new Map();
-for (const [d, arr] of fwdByDay) {
-  if (arr.length >= MIN_MARKET_SAMPLES) marketByDay.set(d, median(arr));
+assertBaselineTable(db);
+const baselineRows = loadBaseline(db, HORIZON_DAYS);
+if (baselineRows.size === 0) {
+  console.log("market_baseline_daily 里还没有基准，先跑：node scripts/build-market-baseline.mjs");
+  process.exit(0);
 }
-fwdByDay.clear(); // 基准算完立刻释放，后面用不到原始数组了
+// 护栏 (d)：断言基准覆盖了本次要用到的**全部**日期，不只是"这一版有行"
+const coverage = assertBaselineCoverage(db, HORIZON_DAYS, requiredDays, { label: "RSI/趋势回算" });
+const marketByDay = new Map([...baselineRows.entries()].map(([day, v]) => [day, v.median]));
 
-// 那两处 `if (base === undefined) continue` 是**静默丢弃**：当天样本不足 MIN_MARKET_SAMPLES
-// 就没有基准，落在那天的样本无声地不参与统计。这里的成因跟护栏 (d) 防的不是同一件事
-// （这个脚本自己算基准，不存在"口径覆盖不全"），但**丢样本不计数**是同一类失效：
-// 结果看起来完全正常，只是基于更少的数据。所以改成计数，跑完打出来。
+// 那两处 `if (base === undefined) continue` 是**静默丢弃**：落在那天的样本无声地不参与统计。
+// 改读物化表之后，缺基准只剩一种成因——**成熟度前沿**（最新 horizon 天还没定型），
+// 其余情况已经被 assertBaselineCoverage 挡成硬失败了。但**丢样本不计数**仍是同一类失效
+// （结果看起来完全正常，只是基于更少的数据），所以照样计数、跑完打出来。
+//
+// ⚠️ **两处的判断顺序必须是「先查前瞻价、再查基准」**，第一版写反了：
+// 序列最后 7 天本来就没有 T+7 的价、无论如何都用不上，而反过来写会把它们**先**记进
+// "缺基准"，于是这个计数器报出 95550 条——**一个吓人但基本不是真实损失的数**。
+// 计数器的意义是"本来能用、却因为缺基准丢了多少"，把注定用不上的也算进去就失去意义了。
+// **这跟计数器要防的失效是同一类**：一个看起来合理、没人会去核对的数字。
 let droppedNoBaseline = 0;
 
 console.log("=== RSI / 均线趋势 超额收益回算 ===");
+console.log(baselineProvenance(db));
+console.log("");
+if (sinceDay) {
+  console.log(`⚠️ **régime 复核模式**：样本已限制在 ${sinceDay} 之后。跟全区间那份并排读。`);
+} else {
+  console.log(
+    "区间：全部历史（**跨越了 2026-04~06 那批未解释的 régime 台阶**，见 report-regime-boundaries.mjs）。" +
+      "要看 régime 影响就跑 --since 2026-07-01，两份并排比。"
+  );
+}
 console.log(`参与统计的饰品：${usableItems.length} 个；大盘基准覆盖 ${marketByDay.size} 天`);
-console.log(`口径：超额 = 该样本未来 ${HORIZON_DAYS} 天收益 − 当天全市场中位数（同 build-sell-rule-baseline.mjs）`);
+console.log(
+  `本次要用到 ${requiredDays.size} 天，其中 ${coverage.coveredDays} 天有基准、` +
+    `${coverage.frontierCount} 天落在成熟度前沿（基准要 day+${HORIZON_DAYS}+6h 才定型，是形状不是缺口）`
+);
+console.log(`口径：超额 = 该样本未来 ${HORIZON_DAYS} 天收益 − 当天全市场中位数（**与 build-sell-rule-baseline.mjs 共用同一份物化基准**）`);
 console.log("只看中位数不看均值——皮肤价格是重尾分布，均值会被几个低价品主导。");
 
 // ================= 第二遍：逐饰品算指标并聚合 =================
@@ -310,14 +366,15 @@ for (const [item, platform] of usableItems) {
 
   for (let i = 48; i < series.length; i++) {
     const [ts, price] = series[i];
+    if (sinceMs !== null && ts < sinceMs) continue;
     const day = Math.floor(ts / DAY_MS) * DAY_MS;
+    const futureIdx = hourIndex.get(ts + HORIZON_DAYS * DAY_MS);
+    if (futureIdx === undefined) continue;
     const base = marketByDay.get(day);
     if (base === undefined) {
       droppedNoBaseline += 1;
       continue;
     }
-    const futureIdx = hourIndex.get(ts + HORIZON_DAYS * DAY_MS);
-    if (futureIdx === undefined) continue;
     const excess = (series[futureIdx][1] - price) / price - base;
 
     const prev24 = series[i - 24]?.[1];
@@ -625,14 +682,15 @@ for (const [item, platform] of usableItems) {
   const ma30h = movingAverage(prices, 30);
   for (let i = 48; i < series.length; i++) {
     const [ts, price] = series[i];
+    if (sinceMs !== null && ts < sinceMs) continue;
     const day = Math.floor(ts / DAY_MS) * DAY_MS;
+    const fi = hourIndex.get(ts + HORIZON_DAYS * DAY_MS);
+    if (fi === undefined) continue;
     const base = marketByDay.get(day);
     if (base === undefined) {
       droppedNoBaseline += 1;
       continue;
     }
-    const fi = hourIndex.get(ts + HORIZON_DAYS * DAY_MS);
-    if (fi === undefined) continue;
     const prev24 = series[i - 24]?.[1];
     if (!prev24 || prev24 <= 0) continue;
     const r24 = (price - prev24) / prev24;
@@ -667,7 +725,8 @@ console.log("   要拿它做任何决定，必须先补按饰品的符号检验�
 
 console.log("");
 console.log(
-  `因当天没有大盘基准（样本不足 ${MIN_MARKET_SAMPLES} 条）被丢弃的小时级样本：${droppedNoBaseline} 条。` +
+  `因当天没有大盘基准被丢弃的小时级样本：${droppedNoBaseline} 条（改读物化表之后，` +
+    `这只剩一种成因——成熟度前沿，其余情况已被 assertBaselineCoverage 挡成硬失败）。` +
     "**留痕不是装饰**：丢样本不计数是最难发现的一类失效——结果看起来完全正常，只是基于更少的数据。"
 );
 
