@@ -65,7 +65,12 @@
 // "超额为正、绝对为零"，只按超额判的话它们全都会被误读成买点。
 import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
-import { assertBaselineTable, baselineProvenance, loadBaseline } from "./market-baseline-store.mjs";
+import {
+  assertBaselineCoverage,
+  assertBaselineTable,
+  baselineProvenance,
+  loadBaseline,
+} from "./market-baseline-store.mjs";
 import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
 // ---- --since：régime 边界（口径第 5 条）----
@@ -383,6 +388,9 @@ let itemsUsed = 0;
 let rawSamples = 0;
 let skippedGap = 0;
 const missingBaselineByDay = new Map();
+// 本次真正会用到的天（含缺基准那些），交给 assertBaselineCoverage 判覆盖——
+// 光有 missingBaselineByDay 只能事后打印，挡不住"基准只覆盖了一小段"这种情况
+const candidateDays = new Set();
 
 for (const item of items) {
   const platform = referencePlatform(item);
@@ -412,8 +420,10 @@ for (const item of items) {
       // 缺口永远落在最新那几天（7 天窗口要到 day+7+6h 才定型），是系统性的不是随机的。
       const k = new Date(day).toISOString().slice(0, 10);
       missingBaselineByDay.set(k, (missingBaselineByDay.get(k) ?? 0) + 1);
+      candidateDays.add(day); // 断言要看到它，见循环之后的 assertBaselineCoverage
       continue;
     }
+    candidateDays.add(day);
 
     // ---- 特征 ----
     // ⚠️ **回看一律按时间戳查，不按数组下标**。build-sell-rule-baseline.mjs 用的是
@@ -477,6 +487,11 @@ for (const item of items) {
   if (byDay.size) perItemDaily.set(item, [...byDay.values()]);
 }
 
+// 护栏 (d)：断言基准覆盖了本次要用到的**全部**日期，不只是"这一版有行"。
+// 不加这一条的话，一份只覆盖最近 24 天的基准（--daily 补新版本就长这样）照样能让
+// assertBaselineTable 放行，然后其余日期的样本被上面那个 continue 静默丢掉。
+const coverage = assertBaselineCoverage(db, HORIZON_DAYS, candidateDays, { label: "买入侧分档" });
+
 const allSamples = [...perItemDaily.values()].flat();
 const days = [...new Set(allSamples.map((s) => s.day))].sort();
 
@@ -507,6 +522,10 @@ if (missingBaselineByDay.size) {
     `缺大盘基准被剔除的小时级样本：${[...missingBaselineByDay.values()].reduce((a, b) => a + b, 0)} 条，` +
       `集中在 ${top.map(([d, n]) => `${d}(${n})`).join("、")}` +
       `${missingBaselineByDay.size > 5 ? ` 等 ${missingBaselineByDay.size} 天` : ""}`
+  );
+  console.log(
+    `  其中 ${coverage.frontierCount} 天是**成熟度前沿**（基准要到 day+${HORIZON_DAYS}+6h 才定型，` +
+      `所以永远缺最新几天，这是形状不是故障）；覆盖断言已通过，说明没有更早的空档。`
   );
 }
 console.log("");

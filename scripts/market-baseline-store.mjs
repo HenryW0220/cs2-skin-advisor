@@ -469,6 +469,86 @@ export function loadBaseline(db, horizon, calcVersion = BASELINE_CALC_VERSION) {
   );
 }
 
+/**
+ * 断言基准**覆盖了本次真正要用到的那些天**，不只是"这一版有行"。
+ *
+ * ---- 为什么必须有这个（2026-08-15，护栏 (d)）----
+ * `assertBaselineTable` 只检查"当前口径版本在表里有没有行"。**有一行它就放行。**
+ * 于是存在这样一条后门：用 `--daily` 给一个全新的口径版本补基准时，它最多只回溯 30 天
+ * （见 ensureBaselines 里的 `back <= 30`），一版需要 113 天的基准会被补成**只有最近 24 天**，
+ * 而 `assertBaselineTable` **照样放行**。接下来评估脚本里那句
+ * `const base = marketByDay.get(day); if (base === undefined) continue;`
+ * 会把落在其余 89 天的样本**静默丢掉、连计数都没有**，然后给出一套"重新反推的阈值"——
+ * 数字看起来完全正常，只是基于 20% 的数据。
+ *
+ * **这正是迁移 024 那套护栏要防的形状，而它发生在护栏内部。**丢样本不计数是最难发现的
+ * 一类失效：不报错、不告警、结果自洽。
+ *
+ * ---- 三种缺失要分开处理，这是这个函数的全部意义 ----
+ *   · **早于 first_day** → 硬失败。基准根本没算到那么早（--daily 补新版本就长这样）。
+ *   · **落在 [first_day, last_day] 中间却没有行** → 硬失败。那是个洞，不该存在。
+ *   · **晚于 last_day** → **不失败**，这是成熟度前沿：一天的基准要到 day+horizon+6h 才定型，
+ *     所以**报告永远缺最新 horizon 天**，这是形状不是缺口（护栏 (c) 早就记过）。
+ *     但要**返回计数让调用方打印出来**，把静默丢弃变成留痕。
+ *
+ * @param requiredDays 本次真正要用到的天（毫秒时间戳，当天 00:00 UTC），可迭代
+ * @returns { coveredDays, frontierDays: string[], frontierCount } —— 调用方应当把前沿打印出来
+ */
+export function assertBaselineCoverage(
+  db,
+  horizon,
+  requiredDays,
+  { label = "", calcVersion = BASELINE_CALC_VERSION } = {}
+) {
+  const span = db
+    .prepare(
+      `SELECT MIN(day) first_day, MAX(day) last_day, COUNT(*) rows
+       FROM market_baseline_daily WHERE horizon_days = ? AND calc_version = ?`
+    )
+    .get(horizon, calcVersion);
+  if (!span.rows) {
+    throw new Error(
+      `基准里没有窗口 ${horizon} 天 / 口径 ${calcVersion} 的任何一行。先跑 build-market-baseline.mjs。`
+    );
+  }
+  const have = new Set(
+    db
+      .prepare("SELECT day FROM market_baseline_daily WHERE horizon_days = ? AND calc_version = ?")
+      .all(horizon, calcVersion)
+      .map((r) => r.day)
+  );
+
+  const tooEarly = [];
+  const holes = [];
+  const frontier = [];
+  let covered = 0;
+  for (const ms of new Set(requiredDays)) {
+    const key = dayKey(ms);
+    if (have.has(key)) {
+      covered += 1;
+      continue;
+    }
+    if (key < span.first_day) tooEarly.push(key);
+    else if (key > span.last_day) frontier.push(key);
+    else holes.push(key);
+  }
+
+  if (tooEarly.length || holes.length) {
+    const show = (a) => (a.length > 6 ? `${a.slice(0, 6).join("、")} 等 ${a.length} 天` : a.join("、"));
+    throw new Error(
+      `基准覆盖不全${label ? `（${label}）` : ""}：窗口 ${horizon} 天 / 口径 ${calcVersion} 只覆盖 ` +
+        `${span.first_day} ~ ${span.last_day}（${span.rows} 行），但本次要用到的天里——\n` +
+        (tooEarly.length ? `  · ${tooEarly.length} 天**早于基准起点**：${show(tooEarly.sort())}\n` : "") +
+        (holes.length ? `  · ${holes.length} 天**落在基准区间内却没有行**（洞）：${show(holes.sort())}\n` : "") +
+        `**这不是"最新几天还没定型"**（那种情况在 last_day 之后，本函数不会报错）。\n` +
+        `最可能的原因：这一版口径是用 --daily 补的，而 --daily 最多只回溯 30 天。\n` +
+        `修法是用**全量模式**把这一版补齐：node scripts/build-market-baseline.mjs ${horizon} …\n` +
+        `**不要把这个断言关掉**——关掉之后这些天的样本会被静默丢弃，报告照样出数字。`
+    );
+  }
+  return { coveredDays: covered, frontierDays: frontier.sort(), frontierCount: frontier.length };
+}
+
 /** 报告脚本抬头打这一行：任何引用基准的数字，都要能说清是哪一版口径算的。 */
 export function baselineProvenance(db, calcVersion = BASELINE_CALC_VERSION) {
   const meta = db.prepare("SELECT * FROM market_baseline_meta WHERE calc_version = ?").get(calcVersion);

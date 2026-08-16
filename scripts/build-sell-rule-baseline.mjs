@@ -45,7 +45,12 @@
 // 比的是"此刻卖"vs"继续持有 N 天"的毛收益，两边都要扣一次手续费、差额上抵消。
 // 按小时重采样，跟 lib/signals/resample.ts 同口径。
 import Database from "better-sqlite3";
-import { assertBaselineTable, baselineProvenance, loadBaseline } from "./market-baseline-store.mjs";
+import {
+  assertBaselineCoverage,
+  assertBaselineTable,
+  baselineProvenance,
+  loadBaseline,
+} from "./market-baseline-store.mjs";
 import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
 // ---- --since：把样本限制在某个日期之后，用来做 régime 复核 ----
@@ -176,6 +181,22 @@ if (baselineRows.size === 0) {
 console.log(baselineProvenance(db));
 console.log("");
 const marketByDay = new Map([...baselineRows.entries()].map(([day, v]) => [day, v.median]));
+
+// ---------- 覆盖断言（护栏 (d)，2026-08-15）----------
+// 下面那句 `if (base === undefined) continue` 是**静默丢弃**：基准少覆盖一段日期，
+// 落在那段的样本就无声地不参与统计，而 v2 的全部阈值正是从这张表反推的。
+// `assertBaselineTable` 挡不住这种情况（它只看"这一版有没有行"），所以在这里显式断言覆盖。
+const requiredDays = new Set();
+for (const [, samples] of perItemSamples) for (const s of samples) requiredDays.add(s.day);
+const coverage = assertBaselineCoverage(db, HORIZON_DAYS, requiredDays, { label: "卖出阈值反推" });
+if (coverage.frontierCount) {
+  console.log(
+    `⚠️ 有 ${coverage.frontierCount} 天落在成熟度前沿（基准要到 day+${HORIZON_DAYS}+6h 才定型），` +
+      `这些天的样本本次不参与：${coverage.frontierDays.slice(0, 8).join("、")}` +
+      `${coverage.frontierCount > 8 ? ` 等` : ""}。**缺口永远落在最新那几天，是形状不是故障。**`
+  );
+  console.log("");
+}
 
 // ---------- 第二遍：按档位汇总超额收益 ----------
 const agg = new Map(); // band -> {all:[], washout:[], noWashout:[]}

@@ -6,6 +6,22 @@
 // 要回答的问题：v1 规则引擎（lib/rules/evaluate.ts）的两个主要打分来源——RSI 超买/超卖
 // （±30）和均线趋势走强/走弱（+15/−25）——**从来没有任何回测支撑**，权重是当初拍的经验值
 // （HYPOTHESES.md §2.2）。成交量那一项已经查明是死信号并删除了，剩下这两项是 v1 的全部。
+// ⚠️ **2026-08-15 更正：下面这句"完全一致的口径"已经不成立了，别照着它引用。**
+// 写这句的时候（8-03）确实一致——那时两个脚本都是**各自在脚本里现算**大盘基准。
+// 但 8-13/8-14 之后 `build-sell-rule-baseline.mjs` 改成读**物化表**（迁移 023/024），
+// 而这个脚本**至今还是自己算**，于是两边在两处分了岔：
+//   ① **定型/整天门槛**：物化表口径 `dayCompleteness=whole-day-only` + `settleHours=6`
+//      ——一天要整天定型了才算数；这个脚本**没有任何定型逻辑**，边界日会用半天数据参与。
+//      **这正是 b9645fa10 → b03672dc0 那次升版要修的缺陷**（实测那一天中位数 −2.14% → −2.38%）。
+//   ② **中位数在偶数样本上的取法**：物化表是 `mean-of-two-middles`，这里是 `s[floor(n/2)]`。
+// 其余（参考平台优先级、每饰品 200 条快照下限、24×(窗口+14) 历史门槛、每天 20 条样本下限、
+// 按小时重采样）仍然一致。
+// **影响量级没测过**：本脚本的数字（±0.5% ~ −3.57%）直接写进了 `lib/rules/cost-line.ts` 的
+// SIGNAL_EVIDENCE，而那份数据在页面和 LLM 提示词里驱动"不可行动"标注。上一次同类差异只
+// 移动了 0.24pp / 每窗口 1 天，**大概率不影响任何结论，但目前是「没量过」不是「已确认无影响」。**
+// 要修的话不是改这里的常量，是让它也读物化表——那会改变已发布的数字，属于要拍板的动作。
+// 这条属于 HANDOFF 第四节 0.5「生产与回测必须共用同一份定义」那个待办的同族。
+//
 // 这个脚本用跟 build-sell-rule-baseline.mjs **完全一致的口径**给它们做同样的检验：
 //   超额 = 某时点的"未来 7 天收益 − 当天全市场中位数收益"
 // 只把分档维度从「24h 涨幅」换成「RSI 档位」和「趋势状态」。
@@ -233,6 +249,12 @@ for (const [d, arr] of fwdByDay) {
 }
 fwdByDay.clear(); // 基准算完立刻释放，后面用不到原始数组了
 
+// 那两处 `if (base === undefined) continue` 是**静默丢弃**：当天样本不足 MIN_MARKET_SAMPLES
+// 就没有基准，落在那天的样本无声地不参与统计。这里的成因跟护栏 (d) 防的不是同一件事
+// （这个脚本自己算基准，不存在"口径覆盖不全"），但**丢样本不计数**是同一类失效：
+// 结果看起来完全正常，只是基于更少的数据。所以改成计数，跑完打出来。
+let droppedNoBaseline = 0;
+
 console.log("=== RSI / 均线趋势 超额收益回算 ===");
 console.log(`参与统计的饰品：${usableItems.length} 个；大盘基准覆盖 ${marketByDay.size} 天`);
 console.log(`口径：超额 = 该样本未来 ${HORIZON_DAYS} 天收益 − 当天全市场中位数（同 build-sell-rule-baseline.mjs）`);
@@ -290,7 +312,10 @@ for (const [item, platform] of usableItems) {
     const [ts, price] = series[i];
     const day = Math.floor(ts / DAY_MS) * DAY_MS;
     const base = marketByDay.get(day);
-    if (base === undefined) continue;
+    if (base === undefined) {
+      droppedNoBaseline += 1;
+      continue;
+    }
     const futureIdx = hourIndex.get(ts + HORIZON_DAYS * DAY_MS);
     if (futureIdx === undefined) continue;
     const excess = (series[futureIdx][1] - price) / price - base;
@@ -602,7 +627,10 @@ for (const [item, platform] of usableItems) {
     const [ts, price] = series[i];
     const day = Math.floor(ts / DAY_MS) * DAY_MS;
     const base = marketByDay.get(day);
-    if (base === undefined) continue;
+    if (base === undefined) {
+      droppedNoBaseline += 1;
+      continue;
+    }
     const fi = hourIndex.get(ts + HORIZON_DAYS * DAY_MS);
     if (fi === undefined) continue;
     const prev24 = series[i - 24]?.[1];
@@ -636,6 +664,12 @@ console.log("⚠️  **这一节是池化的，没做按饰品检验，只能当
 console.log("   而且两侧样本数往往极不对称——「24h 涨 ≥15% 同时价格还在下行均线之下」本来就是");
 console.log("   罕见状态（急跌后的反抽），样本少、又高度自相关，那一格的数字最不稳。");
 console.log("   要拿它做任何决定，必须先补按饰品的符号检验，并且分档后每个饰品的样本量要够。");
+
+console.log("");
+console.log(
+  `因当天没有大盘基准（样本不足 ${MIN_MARKET_SAMPLES} 条）被丢弃的小时级样本：${droppedNoBaseline} 条。` +
+    "**留痕不是装饰**：丢样本不计数是最难发现的一类失效——结果看起来完全正常，只是基于更少的数据。"
+);
 
 console.log("");
 console.log("=== 这份输出不能证明什么 ===");
