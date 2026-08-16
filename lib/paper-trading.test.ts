@@ -566,6 +566,49 @@ describe("卖出规则 v2 的影子记录", () => {
     });
   });
 
+  // 迁移 027：影子额外存一份**小时桶口径**的 24h 涨幅，跟决策瞬间口径并存。
+  // 锁两件事：① 桶不够 25 个时必须是 null（**不做就近取值**）；② 够了就要跟决策口径**分开算**。
+  // 为什么值得单测：这两个字段名字几乎一样、值大多数时候也接近，**一旦哪天有人"顺手统一"
+  // 成同一个来源，这一列就静默失去全部意义**——而它存在的唯一理由就是记录两者的差异。
+  it("小时桶不足 24 小时回看时，桶口径记 null 而不是就近取值", () => {
+    seedOpenTrade();
+    state.summaries["Item A"] = {
+      score: 0,
+      price: 13,
+      action: "HOLD",
+      changeTodayPercent: 35,
+      recentPrices: [10, 11, 13], // 只有 3 个桶，远不够 25
+    };
+
+    runPaperTradingTick();
+
+    expect(state.shadowSignals[0].return_24h).toBeCloseTo(0.35, 10);
+    expect(state.shadowSignals[0].return_24h_bucket).toBeNull();
+  });
+
+  it("桶够的时候两种口径各算各的，互不影响", () => {
+    seedOpenTrade();
+    // 30 个桶：24 桶之前是 100，最后一个是 120 ⇒ 桶口径 = +20%
+    const recentPrices = Array.from({ length: 30 }, () => 100);
+    recentPrices[recentPrices.length - 1] = 120;
+    state.summaries["Item A"] = {
+      score: 0,
+      price: 120,
+      action: "HOLD",
+      changeTodayPercent: 35, // 决策瞬间口径是 +35%，跟桶口径**故意不同**
+      recentPrices,
+    };
+
+    runPaperTradingTick();
+
+    // 决策口径不受桶口径影响
+    expect(state.shadowSignals[0].return_24h).toBeCloseTo(0.35, 10);
+    // 桶口径 = (120 − 100) / 100
+    expect(state.shadowSignals[0].return_24h_bucket).toBeCloseTo(0.2, 10);
+    // 判定仍然只看决策口径：+35% ⇒ SELL_STRONG（≥30%），而不是桶口径的 +20%（那只到 SELL）
+    expect(state.shadowSignals[0].action).toBe("SELL_STRONG");
+  });
+
   // 2026-08-03 之前这条锁的是相反的语义（"v2 说卖，仓位必须还是 open"），那是并行期
   // 的约束。现在模拟盘平仓已经交给 v2，所以要锁的变成"影子记录和真实平仓必须同源"：
   // 同一轮里两边看到的必须是同一个判定，否则影子表和模拟盘流水对不上，

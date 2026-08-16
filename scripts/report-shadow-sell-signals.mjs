@@ -147,8 +147,22 @@ function marketBaseline(decidedAt) {
   const dayMs = Math.floor(Date.parse(decidedAt) / DAY_MS) * DAY_MS;
   const hit = baselineByDay.get(dayMs);
   if (!hit) {
-    // 这一天的基准要到 day + horizon + 定型余量 之后才可能存在
-    if (dayMs + HORIZON_DAYS * DAY_MS + SETTLE_MS > Date.now()) missingImmature += 1;
+    // ⚠️ **判定型必须用当天的最后一小时，不是 00:00**（2026-08-16 修）。
+    // 物化表口径是 `dayCompleteness: whole-day-only`——**一天要整天都定型了才写**
+    // （market-baseline-store.mjs 里 `lastHourMs + horizon*DAY + SETTLE > cutoff`）。
+    // 而这里原来用 `dayMs`（当天 00:00）判，于是 **D 日的基准还差最后一小时没定型时，
+    // 落在 D 日的信号会被判成「已成熟却查不到 ⇒ 真缺口 ⇒ builder 没跑」**。
+    //
+    // **这个误判不只是标签错了，它指挥人做了一次无效操作**：2026-08-16 照着它的提示跑了
+    // 一轮 builder，builder 正确地回答"没有已定型且缺失的日子，无事可做"（114.6 秒）。
+    // 根因是**两个"成熟"不是同一件事**：一条 D 日的**信号**在 D+7 到期，而 D 日**那一天的
+    // 基准**要等当天最后一小时也走完 D+7+6h——**所以永远存在约一天的窗口，信号熟了、
+    // 它那天的基准还没熟**。那是形状不是缺口。
+    //
+    // 这一处本身又是"两边各写一份定义"（HANDOFF 第四节 0.5）：定型规则在 store 里有一份、
+    // 这里重写了一份，而 store 那份在 b9645fa10 → b03672dc0 升版时改了，这份没跟上。
+    const lastHourMs = dayMs + DAY_MS - HOUR_MS;
+    if (lastHourMs + HORIZON_DAYS * DAY_MS + SETTLE_MS > Date.now()) missingImmature += 1;
     else {
       missingSettled += 1;
       missingSettledDays.add(new Date(dayMs).toISOString().slice(0, 10));
@@ -259,6 +273,93 @@ if (decisive.length) {
   }
 } else {
   console.log('5~15%（"明确不触发"那一段）：0 条可评估——这次没有任何主动放弃的换手到期，本节无结论。');
+}
+
+// ============================================================================
+// 注意力面板：哪一格在长、每一格离自己的门槛还差多少
+// ============================================================================
+// **为什么固定输出这个（2026-08-16）**：观察期判据一直挂在错误的位置上。
+// HANDOFF 定的是"攒到三位数卖出信号再下结论"，而那个三位数指的是 **SELL 类**；
+// 实际情况是 SELL 12 条、SELL_STRONG 1 条，而 **HOLD 5~15% 段已经 60 条**——
+// **照现在的速度 SELL 攒到三位数要几个月，而那期间真正在积累证据的那一格没有任何判据在盯着。**
+//
+// 这跟 2026-08-16 归因查出来的形状是同一个：**问题不是数据不够，是没人在看那一格。**
+// 所以让报告自己指出注意力该放哪，不用人去翻。
+const NOW = Date.now();
+const WEEK_MS = 7 * DAY_MS;
+const cells = [
+  ...BANDS.map((b) => ({
+    name: `HOLD ${b.label}`,
+    verdict: b.verdict,
+    match: (s) => s.action === "HOLD" && bandOf(s.return_24h)?.key === b.key,
+  })),
+  { name: "SELL", verdict: "卖出", match: (s) => s.action === "SELL" },
+  { name: "SELL_STRONG", verdict: "卖出", match: (s) => s.action === "SELL_STRONG" },
+];
+// 门槛跟上面那条判据一致：可评估 ≥30 条且 ≥10 个饰品
+const GATE_EVAL = 30;
+const GATE_ITEMS = 10;
+
+console.log("");
+console.log("=== 注意力面板：哪一格在长、离门槛还差多少 ===");
+console.log("**判据挂错位置是个真实风险**：我们盯着 SELL 类攒三位数，而证据其实长在 HOLD 的判断档里。");
+console.log("");
+console.log("格子             | 性质 | 累计 | 可评估 | 饰品 | 近 7 天 | 前 7 天 | 增速   | 离门槛还差");
+console.log("-----------------|------|------|--------|------|---------|---------|--------|----------");
+const panel = [];
+for (const c of cells) {
+  const mine = signals.filter(c.match);
+  if (!mine.length) continue;
+  const recent = mine.filter((s) => NOW - Date.parse(s.decided_at) < WEEK_MS).length;
+  const prior = mine.filter((s) => {
+    const age = NOW - Date.parse(s.decided_at);
+    return age >= WEEK_MS && age < 2 * WEEK_MS;
+  }).length;
+  // 可评估数和饰品数直接复用上面算好的，避免第二份口径
+  let evalN = 0;
+  let itemN = 0;
+  if (c.name.startsWith("HOLD ")) {
+    const key = BANDS.find((b) => `HOLD ${b.label}` === c.name)?.key;
+    const hit = holdByBand.get(key);
+    evalN = hit?.excess.length ?? 0;
+    itemN = hit?.items.size ?? 0;
+  } else {
+    evalN = scored[c.name]?.length ?? 0;
+    itemN = new Set(mine.map((s) => s.item_name)).size;
+  }
+  const need = [];
+  if (evalN < GATE_EVAL) need.push(`${GATE_EVAL - evalN} 条`);
+  if (itemN < GATE_ITEMS) need.push(`${GATE_ITEMS - itemN} 品`);
+  const growth = prior === 0 ? (recent > 0 ? "新增" : "—") : `${(recent / prior).toFixed(2)}×`;
+  panel.push({ name: c.name, verdict: c.verdict, recent, evalN, itemN, passed: !need.length });
+  console.log(
+    `${c.name.padEnd(16)} | ${c.verdict.padEnd(4)} | ${String(mine.length).padStart(4)} | ` +
+      `${String(evalN).padStart(6)} | ${String(itemN).padStart(4)} | ${String(recent).padStart(7)} | ` +
+      `${String(prior).padStart(7)} | ${growth.padStart(6)} | ${need.length ? "还差 " + need.join(" + ") : "**已过门槛**"}`
+  );
+}
+console.log("");
+{
+  // **排名要排除弃权格**：HOLD 的"跌"和"0~5%"是 v2 根本不打算表态的区间，
+  // 它们永远是增长最快的（占了全部信号的 95%），但 HANDOFF ⑩ 已经确认
+  // **那 600 条弃权票的信息量跟 n=1 没差多少**——把它们排进来，这块面板每轮都会
+  // 指向同一个没有信息的地方，等于没有面板。只在"判断/卖出"这些**规则真的表了态**的格子里排。
+  const informative = panel.filter((p) => p.verdict !== "弃权");
+  const fastest = [...informative].sort((a, b) => b.recent - a.recent)[0];
+  const passed = informative.filter((p) => p.passed).map((p) => p.name);
+  if (fastest) {
+    console.log(
+      `**近 7 天新增最多的「有表态」格子：${fastest.name}（${fastest.recent} 条）** ← 注意力该放这里。`
+    );
+    console.log("（弃权格「跌」「0~5%」不参与排名：它们占了全部信号的绝大多数，但那是 v2 不表态的区间，");
+    console.log("  信息量跟 n=1 没差多少（HANDOFF ⑩）。排进来的话这块面板每轮都指向同一个没信息的地方。）");
+  }
+  console.log(
+    passed.length
+      ? `**有表态且已过门槛的格子：${passed.join("、")}** —— 这些格子的数字可以当结论读（仍要看幅度对成本线）。`
+      : "**目前没有任何「有表态」的格子过门槛**，所有数字都只能看方向。"
+  );
+  console.log("⚠️ 过门槛只说明「样本够了」，**不说明够得着成本线**——那是另一条判据，别混。");
 }
 const vetoed = ["15-20", "20-30", "30+"].flatMap((k) => holdByBand.get(k)?.excess ?? []);
 if (vetoed.length) {

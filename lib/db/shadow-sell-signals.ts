@@ -9,7 +9,19 @@ export interface IShadowSellSignal {
   action: string;
   reason: string;
   price: number;
+  /** 决策瞬间口径的 24h 涨幅（小数）。**v2 的判定用的就是这个**，见 lib/signal-summary.ts 的 changeToday。 */
   return_24h: number;
+  /**
+   * 小时桶口径的同一个量（小数），**只观察不参与决策**（迁移 027）。
+   *
+   * 存两份是因为影子和回测的取样方式不同：影子在决策瞬间判、回测按整点桶取样，
+   * 实测 31.8% 的样本取值不同、最大差 16.4pp。只存一份的话，"影子 5~15% 档"和
+   * "回测 5~15% 档"装的不是同一批样本，而两个数看起来完全可以相减——
+   * 我们已经在这上面差点得出过错误结论（REPORT-hold-5to15-attribution.md）。
+   *
+   * 小时桶不足 25 个（不够回看 24 小时）时是 null；迁移之前的历史行也是 null。
+   */
+  return_24h_bucket: number | null;
   drawdown_48h: number;
   decided_at: string;
   created_at: string;
@@ -28,9 +40,9 @@ export function recordShadowSellSignal(
   const result = getDb()
     .prepare(
       `INSERT OR IGNORE INTO shadow_sell_signals
-         (trade_id, item_name, platform, rule_version, action, reason, price, return_24h, drawdown_48h, decided_at)
+         (trade_id, item_name, platform, rule_version, action, reason, price, return_24h, return_24h_bucket, drawdown_48h, decided_at)
        VALUES
-         (@trade_id, @item_name, @platform, @rule_version, @action, @reason, @price, @return_24h, @drawdown_48h, @decided_at)`
+         (@trade_id, @item_name, @platform, @rule_version, @action, @reason, @price, @return_24h, @return_24h_bucket, @drawdown_48h, @decided_at)`
     )
     .run(signal);
   return result.changes > 0;

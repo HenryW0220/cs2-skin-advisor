@@ -73,6 +73,26 @@ function return24hOf(summary: ISignalSummary): number {
 }
 
 /**
+ * 同一个量的**小时桶口径**版本：两端都取整点桶，跟回测脚本一致。
+ * **只用于留痕，不参与任何判定**——真实交易发生在瞬间不是整点，判定该用 `return24hOf`。
+ *
+ * 为什么要多存这一份（迁移 027）：影子按决策瞬间取样、回测按整点桶取样，实测两者在
+ * **31.8%** 的样本上取值不同、最大差 **16.4pp**。只存一份的话两边的"5~15% 档"装的不是
+ * 同一批样本，而那两个数看起来完全可以相减——2026-08-16 已经在这上面差点得出错误结论
+ * （REPORT-hold-5to15-attribution.md）。**靠"以后记得不能相减"不可靠，所以两份都存。**
+ *
+ * @returns 小时桶不足 25 个（不够回看 24 小时）时返回 null，不做就近取值
+ */
+function return24hBucketOf(summary: ISignalSummary): number | null {
+  const prices = summary.recentPrices;
+  if (prices.length < 25) return null;
+  const now = prices[prices.length - 1];
+  const dayAgo = prices[prices.length - 25];
+  if (!(dayAgo > 0)) return null;
+  return (now - dayAgo) / dayAgo;
+}
+
+/**
  * 跑一次卖出规则 v2。
  *
  * **一轮里只调用这一次，结果同时喂给真实平仓和影子记录**——两边必须是同一次判定，
@@ -119,6 +139,7 @@ function recordShadowDecision(
       reason: verdict.reason,
       price: summary.signals.price,
       return_24h: return24hOf(summary),
+      return_24h_bucket: return24hBucketOf(summary),
       drawdown_48h: verdict.drawdown48h,
       decided_at: new Date().toISOString(),
     });
