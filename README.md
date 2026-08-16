@@ -39,6 +39,7 @@ npm run dev
 - **[REPORT-manipulation-playbook-stages.md](REPORT-manipulation-playbook-stages.md)** —— 操盘剧本六阶段的数据验证报告（低位横盘/吸货/会员进场/洗盘/主拉升/出货）。
 - **[REPORT-prediction-baseline.md](REPORT-prediction-baseline.md)** —— C1/C2 预测模型第一版基线报告，结论是不满足上线门槛，原因和下一步都写在里面。
 - **[REPORT-bidding-depth-features.md](REPORT-bidding-depth-features.md)** —— 求购深度（挂单簿需求侧）特征验证，第一个统计上站得住的非价格特征。
+- **[REPORT-hold-5to15-attribution.md](REPORT-hold-5to15-attribution.md)** —— 影子里 HOLD 5~15% 段"比回测负一倍"的归因。结论是那个比较本身不成立（一半是口径，残差因取样方式不同无法归因），且查出一个"重大发现"其实是比较方法的偏差。
 - **[REPORT-t7-entry-conditions.md](REPORT-t7-entry-conditions.md)** —— **买入侧的现行结论**：可观测入场条件的 T+7 分档表。35 个档位没有一个够得着 6.7% 的往返成本；顺带在卖出侧发现一条够得着的（偏离均线 >20%）。
 - **[REPORT-t7-actionable-labels.md](REPORT-t7-actionable-labels.md)** —— ⚠️ **已作废（2026-08-15），数字不要引用**，被上面那份取代。留档是因为它记录了"每日 top-5 不按饰品去重"那个真实 bug；它的脚本现在也是坏的（持有期按行数不按小时算，C5 提频后失效）。
 

@@ -305,9 +305,6 @@ console.log("");
 console.log("**Q2-口径 读数**：");
 console.log(`  · 影子实测 5~10% = ${fmt(s510?.median ?? NaN)}，10~15% = ${fmt(s1015?.median ?? NaN)}`);
 console.log(`  · 格子④（同总体 + 同区间的回测）= ${fmt(cellResults["④ 只影子饰品 × 只 8 月|5~10%"])} / ${fmt(cellResults["④ 只影子饰品 × 只 8 月|10~15%"])}`);
-console.log("  · ④ 接近影子实测 ⇒ **差异是口径（总体+区间）不是市场**，那 −6.37% 就不能跟");
-console.log("    已发布的 −2.75% 并排比较，得先对齐。");
-console.log("  · ④ 仍接近 ①（−2.8% 上下）⇒ 总体和区间解释不了，残差要去查定义或别的。");
 console.log("");
 console.log("  分解（各贡献多少 pp）：");
 const c1 = cellResults["① 全市场 × 全区间（= 已发布的回测）|5~10%"];
@@ -317,7 +314,36 @@ const c4 = cellResults["④ 只影子饰品 × 只 8 月|5~10%"];
 console.log(`    只换区间（①→②）：${((c2 - c1) * 100).toFixed(2)}pp`);
 console.log(`    只换总体（①→③）：${((c3 - c1) * 100).toFixed(2)}pp`);
 console.log(`    两者都换（①→④）：${((c4 - c1) * 100).toFixed(2)}pp`);
-console.log(`    影子 − ④（残差）：${(((s510?.median ?? NaN) - c4) * 100).toFixed(2)}pp ← 这一截才需要用"市场变了"或"定义不同"解释`);
+const totalGap = (s510?.median ?? NaN) - c1;
+const explained = c4 - c1;
+const residual = (s510?.median ?? NaN) - c4;
+console.log(`    影子 − ④（残差）：${(residual * 100).toFixed(2)}pp ← 这一截才需要用"市场变了"或"定义不同"解释`);
+console.log("");
+// **判读要算出来，不能把两个分支都打印让人自己挑**——那正是这个项目一直在防的形状
+// （"检查返回一个看着像结论的东西"）。所以这里直接给出份额和结论。
+{
+  const share = Math.abs(explained / totalGap);
+  console.log(
+    `  **Q2-口径 结论**：总缺口 ${(totalGap * 100).toFixed(2)}pp（① ${fmt(c1)} → 影子 ${fmt(s510?.median ?? NaN)}）中，` +
+      `**口径（总体+区间）解释了 ${(explained * 100).toFixed(2)}pp，占 ${(share * 100).toFixed(0)}%**；` +
+      `剩下 ${(residual * 100).toFixed(2)}pp 是残差。`
+  );
+  if (share >= 0.7) {
+    console.log("  ⇒ **缺口主要是口径**。那个 −5.97% 不能跟已发布的 −2.75% 并排比较，得先对齐口径。");
+  } else if (share >= 0.3) {
+    console.log(
+      "  ⇒ **口径解释了一半左右，另一半是残差**。**两个结论都不能单独下**：既不能说" +
+        "「实盘比回测负一倍」（那把口径差算进了市场），也不能说「全是口径」。残差要先查定义。"
+    );
+  } else {
+    console.log("  ⇒ **口径解释不了**，残差是主要部分，要去查定义或市场。");
+  }
+  console.log(
+    `  ⚠️ **而且残差本身可能是选择效应**：影子那 60 条是按**生产的** return_24h 落在 5~15% 选出来的，` +
+      `④ 那 1211 条是按**回测的** return_24h 选出来的。两个定义只要不完全一致，两组装的就不是同一批样本——` +
+      `所以**必须先看下面的定义检查，才能解释残差**。`
+  );
+}
 console.log("");
 
 // ============================================================================
@@ -326,11 +352,19 @@ console.log("");
 console.log("=== Q2（定义）：生产算的 24h 涨幅 vs 回测口径重算，逐条比 ===");
 console.log("`shadow_sell_signals.return_24h` 是**生产当时算出来的**，这是一次真正的");
 console.log("「生产 vs 回测」等价性验证（第四节 0.5 清单里 24h 涨幅正是没核对过的一项）。");
-const diffs = [];
+// ⚠️ **必须同时算两种回看，否则会拿自己的缺陷去指控生产。**
+// 第一版这里只算了 `series[i - 24]`（**按数组下标往回数**），跑出来最大差 16.4pp，
+// 差点写成"生产和回测的 24h 涨幅不是同一个量"。但那正是踩坑 ㉗-a 记的缺陷：
+// 这个序列是**按小时去重后的稀疏数组**，有采集缺口时 `i-24` 落到的可能是 30 小时之前。
+// 所以两个都算：
+//   · **按时间戳**（`hour − 24h` 精确查）= 正确定义，用它判生产对不对；
+//   · **按下标**（`series[i-24]`）= 已发布回测在用的写法，用它量 ㉗-a 那个缺陷的实际影响。
+const diffsTs = [];
+const diffsIdx = [];
 let cmpErr = 0;
+let gapMiss = 0;
 for (const r of shadowRows) {
-  const platform = r.platform;
-  const series = seriesFor(r.item_name, platform);
+  const series = seriesFor(r.item_name, r.platform);
   if (!series.length) {
     cmpErr += 1;
     continue;
@@ -342,34 +376,133 @@ for (const r of shadowRows) {
     cmpErr += 1;
     continue;
   }
-  const prev = series[i - 24]?.[1];
-  if (!prev || prev <= 0) {
-    cmpErr += 1;
-    continue;
+  const cur = series[i][1];
+
+  const prevTsIdx = idx.get(hour - 24 * HOUR_MS);
+  if (prevTsIdx === undefined || series[prevTsIdx][1] <= 0) {
+    gapMiss += 1; // 24 小时前那一格没有快照——按时间戳就该跳过，不做就近取值
+  } else {
+    const mine = (cur - series[prevTsIdx][1]) / series[prevTsIdx][1];
+    diffsTs.push({ item: r.item_name, at: r.decided_at, prod: r.return_24h, mine, d: mine - r.return_24h });
   }
-  const mine = (series[i][1] - prev) / prev;
-  diffs.push({ item: r.item_name, at: r.decided_at, prod: r.return_24h, mine, d: mine - r.return_24h });
+
+  const prevIdx = series[i - 24]?.[1];
+  if (prevIdx > 0) {
+    const mine = (cur - prevIdx) / prevIdx;
+    diffsIdx.push({ item: r.item_name, at: r.decided_at, prod: r.return_24h, mine, d: mine - r.return_24h });
+  }
 }
-if (diffs.length) {
+
+function reportDiffs(title, diffs, note) {
+  if (!diffs.length) {
+    console.log(`${title}：一条都比不了`);
+    return null;
+  }
   const ad = diffs.map((x) => Math.abs(x.d)).sort((a, b) => a - b);
   const exact = diffs.filter((x) => Math.abs(x.d) < 1e-9).length;
   const within1pp = diffs.filter((x) => Math.abs(x.d) < 0.01).length;
+  console.log(`${title}（${note}）`);
   console.log(
-    `可比对 ${diffs.length} 条（${cmpErr} 条取不到对应快照）：完全相同 ${exact}（${((100 * exact) / diffs.length).toFixed(1)}%）、` +
+    `  可比对 ${diffs.length} 条：完全相同 ${exact}（${((100 * exact) / diffs.length).toFixed(1)}%）、` +
       `差 <1pp ${within1pp}（${((100 * within1pp) / diffs.length).toFixed(1)}%）`
   );
-  console.log(`  |差| 中位数 ${(median(ad) * 100).toFixed(3)}pp、p95 ${(ad[Math.floor(ad.length * 0.95)] * 100).toFixed(3)}pp、最大 ${(ad[ad.length - 1] * 100).toFixed(3)}pp`);
-  console.log("  差异最大的 5 条：");
-  for (const x of [...diffs].sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 5)) {
+  console.log(
+    `  |差| 中位数 ${(median(ad) * 100).toFixed(3)}pp、p95 ${(ad[Math.floor(ad.length * 0.95)] * 100).toFixed(3)}pp、最大 ${(ad[ad.length - 1] * 100).toFixed(3)}pp`
+  );
+  const worst = [...diffs].sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 3);
+  for (const x of worst) {
     console.log(
-      `    ${x.item.slice(0, 42).padEnd(42)} ${x.at.slice(0, 16)}  生产 ${(x.prod * 100).toFixed(2)}%  回测 ${(x.mine * 100).toFixed(2)}%  差 ${(x.d * 100).toFixed(2)}pp`
+      `    ${x.item.slice(0, 40).padEnd(40)} ${x.at.slice(0, 16)}  生产 ${(x.prod * 100).toFixed(2)}%  本脚本 ${(x.mine * 100).toFixed(2)}%  差 ${(x.d * 100).toFixed(2)}pp`
     );
   }
-  console.log("");
-  console.log("  **读法**：差异大 ⇒ 两边的「24h 涨幅」不是同一个量，那么「影子 5~15%」和");
-  console.log("  「回测 5~15%」装的根本不是同一批样本，比较本身就不成立。");
-} else {
-  console.log("一条都比不了，定义检查没做成。");
+  return { exactShare: exact / diffs.length, p95: ad[Math.floor(ad.length * 0.95)], max: ad[ad.length - 1] };
+}
+
+const tsRes = reportDiffs("【A】生产 vs 按时间戳回看", diffsTs, "这一组判的是**生产的定义对不对**");
+console.log(`  （另有 ${gapMiss} 条因为 24 小时前那一格没快照而跳过——按时间戳就该跳过，不做就近取值）`);
+console.log("");
+const idxRes = reportDiffs("【B】生产 vs 按数组下标回看", diffsIdx, "这一组量的是**踩坑 ㉗-a 那个缺陷的实际影响**");
+console.log("");
+console.log("  **读法（两组要一起读，单看任何一组都会得出错误结论）**：");
+if (tsRes && idxRes) {
+  console.log(
+    `  · A 组（按时间戳）完全相同 ${(tsRes.exactShare * 100).toFixed(1)}%、最大差 ${(tsRes.max * 100).toFixed(2)}pp；`
+  );
+  console.log(
+    `    B 组（按下标）  完全相同 ${(idxRes.exactShare * 100).toFixed(1)}%、最大差 ${(idxRes.max * 100).toFixed(2)}pp。`
+  );
+  if (Math.abs(tsRes.max - idxRes.max) < 1e-9 && gapMiss === 0) {
+    console.log("  · **A 和 B 完全相同，且没有一条缺格** ⇒ 在这段（8 月、C5 每 10 分钟一写）");
+    console.log("    采集足够密集，**踩坑 ㉗-a 那个「按下标回看」的缺陷在这里影响为 0**。");
+    console.log("    这同时给那个缺陷划了个边界：它只在稀疏/历史区间起作用，不在近期数据上。");
+  } else if (tsRes.max < idxRes.max / 2) {
+    console.log("  · **A 明显好于 B ⇒ 生产的定义是对的，大差异是「按下标回看」这个缺陷造出来的。**");
+  } else {
+    console.log("  · A 和 B 差不多 ⇒ 大差异不能归给下标回看，要另找原因（见下面的取价诊断）。");
+  }
+}
+
+// ---- 取价诊断：大差异到底是"公式不同"还是"我取价的时点不同" ----
+// **这一步是必须的，否则会把自己的比较偏差写成"生产和回测的定义不是同一个量"。**
+// 生产是在**决策那一瞬间**用当时的最新价算的；本脚本读的是**小时桶**，而桶里存的是
+// 那一小时里**最后一次写入**的价（C5 每 10 分钟一写，可能比决策时刻晚将近一小时）。
+console.log("");
+console.log("  ---- 取价诊断：差异是公式不同，还是取价时点不同？----");
+{
+  let same = 0;
+  let diff = 0;
+  const ex = [];
+  for (const r of shadowRows) {
+    const series = seriesFor(r.item_name, r.platform);
+    if (!series.length) continue;
+    const idx = new Map(series.map(([h], i) => [h, i]));
+    const hour = Math.floor(Date.parse(r.decided_at) / HOUR_MS) * HOUR_MS;
+    const i = idx.get(hour);
+    if (i === undefined) continue;
+    const bucket = series[i][1];
+    if (Math.abs(bucket - r.price) < 1e-9) same += 1;
+    else {
+      diff += 1;
+      ex.push({ item: r.item_name, at: r.decided_at, prod: r.price, bucket, rel: (bucket - r.price) / r.price });
+    }
+  }
+  const tot = same + diff;
+  console.log(
+    `  生产存的决策价 vs 小时桶价：相同 ${same}（${((100 * same) / tot).toFixed(1)}%）、` +
+      `不同 ${diff}（${((100 * diff) / tot).toFixed(1)}%）`
+  );
+  ex.sort((a, b) => Math.abs(b.rel) - Math.abs(a.rel));
+  for (const x of ex.slice(0, 3)) {
+    console.log(
+      `    ${x.item.slice(0, 40).padEnd(40)} ${x.at.slice(0, 16)}  生产价 ${x.prod}  桶价 ${x.bucket}  差 ${(x.rel * 100).toFixed(2)}%`
+    );
+  }
+  console.log("  **如果这里最大的几条跟上面涨幅差最大的几条是同一批 ⇒ 差异是取价时点，不是公式。**");
+}
+
+// ---- 入场价稳健性：用生产存的决策价重算超额，看结论动不动 ----
+console.log("");
+console.log("  ---- 入场价稳健性：超额用哪个入场价算 ----");
+{
+  const A = [];
+  const B = [];
+  for (const r of shadowRows) {
+    if (r.action !== "HOLD") continue;
+    if (!(r.return_24h >= 0.05 && r.return_24h < 0.15)) continue;
+    const series = seriesFor(r.item_name, r.platform);
+    const idx = new Map(series.map(([h], i) => [h, i]));
+    const hour = Math.floor(Date.parse(r.decided_at) / HOUR_MS) * HOUR_MS;
+    const i = idx.get(hour);
+    const f = idx.get(hour + HORIZON_DAYS * DAY_MS);
+    if (i === undefined || f === undefined) continue;
+    const bd = marketByDay.get(Math.floor(hour / DAY_MS) * DAY_MS);
+    if (bd === undefined) continue;
+    A.push((series[f][1] - series[i][1]) / series[i][1] - bd);
+    B.push((series[f][1] - r.price) / r.price - bd);
+  }
+  console.log(`  入场用小时桶价：${fmt(median(A))}（为负 ${fmt(pctNeg(A))}）`);
+  console.log(`  入场用生产决策价：${fmt(median(B))}（为负 ${fmt(pctNeg(B))}）  ← 这个更对`);
+  console.log(`  差 ${((median(B) - median(A)) * 100).toFixed(2)}pp ⇒ 结论对入场价取法${Math.abs(median(B) - median(A)) < 0.005 ? "**不敏感**" : "**敏感，要用决策价那版**"}。`);
 }
 console.log("");
 
