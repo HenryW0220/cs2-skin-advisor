@@ -19,19 +19,32 @@
 //    不是观测时间，冷门品会留在很早的时间戳上——按真实时间做时序分析必须按
 //    captured_at 过滤掉 BIDDING_DATA_START 之前的行，否则会混进一批陈旧时间戳。
 import Database from "better-sqlite3";
+import {
+  BIDDING_DATA_START,
+  BIDDING_FEATURES,
+  MIN_ROWS_PER_ITEM,
+  biddingHourlySeries,
+  biddingPlatform,
+  computeBiddingFeatures,
+  precomputeSeries,
+} from "./bidding-features.mjs";
 import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
 const args = parseScriptArgs({
   name: "analyze-bidding-depth-features",
-  usage: "node scripts/analyze-bidding-depth-features.mjs [库文件]",
+  usage: "node scripts/analyze-bidding-depth-features.mjs [库文件] [--until YYYY-MM-DD]",
+  // --until：只用这个日期之前的数据。**加它是为了能复现历史窗口**——
+  // 2026-08-02 那份报告记的 AUC 中位 0.747，到 8-23 重跑变成 0.603，
+  // 差 0.14 而且那个数被别处引用过。要说清成因就必须能把当时那个窗口重新量一遍，
+  // 而不是猜"大概是样本少"。
+  values: { "--until": { parse: String, default: "", label: "只用这个日期之前的数据" } },
   positionals: [{ name: "dbPath", label: "库文件", default: null }],
 });
+const until = args.values["--until"] || null;
 const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 
 const HOUR_MS = 3600 * 1000;
 const DAY_MS = 24 * HOUR_MS;
-const BIDDING_DATA_START = "2026-07-20";
-const MIN_ROWS_PER_ITEM = 100; // 少于这个数算不出 168 小时基线，直接跳过
 
 // ---------- 标注（口径跟 analyze-manipulation-features.mjs 一致）----------
 
@@ -63,53 +76,7 @@ function labelFor(itemName, ts) {
 
 // ---------- 取数 ----------
 
-// 按"求购数据最多"选参考平台。沿用 C5 优先会让绝大多数饰品拿不到求购数据（见文件头第 2 条）。
-function biddingPlatform(itemName) {
-  const row = db
-    .prepare(
-      `SELECT platform, COUNT(*) n FROM price_snapshots
-       WHERE item_name = ? AND bidding_count IS NOT NULL AND price > 0 AND captured_at >= ?
-       GROUP BY platform ORDER BY n DESC LIMIT 1`
-    )
-    .get(itemName, BIDDING_DATA_START);
-  return row && row.n >= MIN_ROWS_PER_ITEM ? row.platform : null;
-}
-
-// 同一小时可能有多条（高频 tick），只留每小时最后一条，跟 lib/signals/resample.ts 同口径
-function hourlySeries(itemName, platform) {
-  const rows = db
-    .prepare(
-      `SELECT captured_at, price, volume, bidding_price, bidding_count
-       FROM price_snapshots
-       WHERE item_name = ? AND platform = ? AND price > 0
-         AND bidding_count IS NOT NULL AND captured_at >= ?
-       ORDER BY captured_at ASC`
-    )
-    .all(itemName, platform, BIDDING_DATA_START);
-  const byHour = new Map();
-  for (const r of rows) {
-    byHour.set(Math.floor(new Date(r.captured_at).getTime() / HOUR_MS) * HOUR_MS, r);
-  }
-  return [...byHour.entries()].sort((a, b) => a[0] - b[0]);
-}
-
-function rollingMean(values, window, index) {
-  const from = Math.max(0, index - window);
-  const slice = values.slice(from, index);
-  if (slice.length < Math.min(window, 24)) return null;
-  return slice.reduce((s, v) => s + v, 0) / slice.length;
-}
-
-// ---------- 特征 ----------
-
-const FEATURES = [
-  ["bidCount", "求购挂单数（原始值）"],
-  ["bidRatio", "求购数 / 自身168h均值"],
-  ["bidAskRatio", "求购数 / 在售数（买卖盘厚度比）"],
-  ["bidAskRatioRel", "买卖盘厚度比 / 自身168h均值"],
-  ["bidSpread", "(在售价-求购价)/在售价，买卖价差"],
-  ["bidCountChg24h", "求购数24小时变化率"],
-];
+const FEATURES = BIDDING_FEATURES;
 
 const samples = { manip: [], normal: [], external: [] };
 const itemsWithData = [];
@@ -120,34 +87,18 @@ const perItem = new Map();
 const taggedItems = db.prepare("SELECT DISTINCT item_name FROM manipulation_tags").all().map((r) => r.item_name);
 
 for (const item of taggedItems) {
-  const platform = biddingPlatform(item);
+  const platform = biddingPlatform(db, item, MIN_ROWS_PER_ITEM, until);
   if (!platform) continue;
-  const series = hourlySeries(item, platform);
+  const series = biddingHourlySeries(db, item, platform, until);
   if (series.length < MIN_ROWS_PER_ITEM) continue;
   itemsWithData.push(`${item} (${platform}, ${series.length}h)`);
 
-  const bidCounts = series.map(([, r]) => r.bidding_count ?? 0);
-  const bidAsk = series.map(([, r]) => {
-    const ask = r.volume ?? 0;
-    return ask > 0 ? (r.bidding_count ?? 0) / ask : 0;
-  });
+  const pre = precomputeSeries(series);
 
   for (let i = 24; i < series.length; i++) {
-    const [ts, row] = series[i];
-    const bidMean = rollingMean(bidCounts, 168, i);
-    const bidAskMean = rollingMean(bidAsk, 168, i);
-    const prev24 = bidCounts[i - 24];
-
+    const [ts] = series[i];
     const label = labelFor(item, ts);
-    const feat = {
-      bidCount: bidCounts[i],
-      bidRatio: bidMean && bidMean > 0 ? bidCounts[i] / bidMean : 1,
-      bidAskRatio: bidAsk[i],
-      bidAskRatioRel: bidAskMean && bidAskMean > 0 ? bidAsk[i] / bidAskMean : 1,
-      bidSpread:
-        row.price > 0 && row.bidding_price != null ? (row.price - row.bidding_price) / row.price : 0,
-      bidCountChg24h: prev24 > 0 ? (bidCounts[i] - prev24) / prev24 : 0,
-    };
+    const feat = computeBiddingFeatures(series, i, pre);
     samples[label].push(feat);
     if (!perItem.has(item)) perItem.set(item, { manip: [], normal: [], external: [] });
     perItem.get(item)[label].push(feat);
@@ -177,6 +128,7 @@ function auc(pos, neg) {
   return (rankSum - (pos.length * (pos.length + 1)) / 2) / (pos.length * neg.length);
 }
 
+console.log(`窗口：${BIDDING_DATA_START} ~ ${until ?? "全部"}`);
 console.log(`求购数据起始：${BIDDING_DATA_START}（此前的行没有这两个字段，已按 captured_at 过滤）`);
 console.log(`有操盘标记且有足够求购数据的饰品：${itemsWithData.length} 个`);
 console.log(`样本量: 操盘期 ${samples.manip.length} | 平时 ${samples.normal.length} | 外部事件期 ${samples.external.length}`);
