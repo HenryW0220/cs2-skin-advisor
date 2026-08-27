@@ -6,6 +6,7 @@
 // 这是"重活对副本跑"这条流程的最后一步（见 scripts/copy-db-for-analysis.mjs）：
 // 副本上算了几十分钟的东西，合并回来只是几百行的一次短写事务，采集器最多被挡几毫秒。
 import Database from "better-sqlite3";
+import { DEPRECATED_CALC_VERSIONS } from "./market-baseline-store.mjs";
 import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
 const args = parseScriptArgs({
@@ -51,6 +52,22 @@ const merge = db.transaction(() => {
       row_count = excluded.row_count,
       updated_at = excluded.updated_at
   `);
+  // 作废原因也要跟着落地（迁移 026）。
+  //
+  // **为什么必须在这里也写一遍**：原来只有 `ensureBaselines`（builder）里的 upsertMeta 会写它，
+  // 而**生产库上根本不跑 builder 的全量模式**——新口径是在本机副本上算完、走这个脚本合并进来的。
+  // 于是"旧版本作废了、错在哪、错多少"这条信息**在生产库里永远是 NULL**，
+  // 而它恰恰是将来有人翻到旧数字时唯一能救他的东西。
+  // **这跟 whole-day-only 只实现在 --daily 分支上是同一个形状**：
+  // 一个机制只在一半的代码路径上生效，而两条路径都不报错。
+  const markDeprecated = db.prepare(
+    `UPDATE market_baseline_meta
+     SET deprecated_reason = ?, deprecated_at = COALESCE(deprecated_at, datetime('now'))
+     WHERE calc_version = ? AND (deprecated_reason IS NULL OR deprecated_reason <> ?)`
+  );
+  for (const [version, reason] of Object.entries(DEPRECATED_CALC_VERSIONS)) {
+    markDeprecated.run(reason, version, reason);
+  }
 });
 merge();
 
