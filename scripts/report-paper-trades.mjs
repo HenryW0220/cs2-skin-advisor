@@ -20,7 +20,12 @@
 // ⑤ **样本不够时不下结论**。回测里 15~20% 档的为负占比也才 61%，几十条样本的随机波动
 //    完全能盖过这个幅度。所以每一组都打印中位数和分位数，而不是只给一个平均值。
 import Database from "better-sqlite3";
-import { assertBaselineTable, baselineProvenance, loadBaseline } from "./market-baseline-store.mjs";
+import {
+  assertBaselineTable,
+  baselineProvenance,
+  loadBaseline,
+  settleCutoff,
+} from "./market-baseline-store.mjs";
 import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
 // 第一个参数可以指定别的库文件。生产上不用传（默认就是容器里的路径），它存在是为了能拿
@@ -100,13 +105,16 @@ const missingBaselineKeys = new Set(); // `${day}|${horizon}`，最后打印成�
 // (b) 已成熟却查不到——builder 没跑或跑漏了，**这一类才该红**。
 // 混在一起打的话，真出问题会被淹在"预期内"的噪音里，而这正是这条留痕想防的事。
 const BASELINE_SETTLE_MS = 6 * HOUR_MS;
+// 成熟度的界是**数据末端**不是墙上时钟，理由同 report-shadow-sell-signals.mjs：
+// 对备份副本跑时，墙上时钟会把"这份库还没有那几天数据"报成"builder 没跑"。
+const DATA_CUTOFF = settleCutoff(db);
 let missingImmature = 0;
 function marketReturn(fromMs, horizonDays) {
   const day = Math.floor(fromMs / DAY_MS) * DAY_MS;
   if (!baselineCache.has(horizonDays)) baselineCache.set(horizonDays, loadBaseline(db, horizonDays));
   const hit = baselineCache.get(horizonDays).get(day);
   if (!hit) {
-    if (day + horizonDays * DAY_MS + BASELINE_SETTLE_MS > Date.now()) missingImmature += 1;
+    if (day + horizonDays * DAY_MS + BASELINE_SETTLE_MS > DATA_CUTOFF) missingImmature += 1;
     else missingBaselineKeys.add(`${new Date(day).toISOString().slice(0, 10)}|${horizonDays}`);
     return null;
   }

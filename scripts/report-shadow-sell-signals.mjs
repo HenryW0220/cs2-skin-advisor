@@ -23,7 +23,13 @@
 // 命中率本身仍然有效：它查的是 decided_at 之后 7 天的实际走势，跟仓位平没平无关。
 // 想看平仓侧的收益，用 scripts/report-paper-trades.mjs——两边是同一次 v2 判定。
 import Database from "better-sqlite3";
-import { assertBaselineTable, baselineProvenance, loadBaseline } from "./market-baseline-store.mjs";
+import {
+  assertBaselineTable,
+  assertCoverageFrontier,
+  baselineProvenance,
+  loadBaseline,
+  settleCutoff,
+} from "./market-baseline-store.mjs";
 import { parseScriptArgs, resolveDbPath } from "./script-args.mjs";
 
 const args = parseScriptArgs({
@@ -35,6 +41,15 @@ const db = new Database(resolveDbPath(args.dbPath), { readonly: true });
 const HOUR_MS = 36e5;
 const DAY_MS = 24 * HOUR_MS;
 const HORIZON_DAYS = 7;
+// 成熟度的界拿**数据末端**当准，不拿墙上时钟——而且是从 market-baseline-store 里 import
+// 过来的那一份，不是在这里重写一遍（HANDOFF 第四节 0.5：双份实现的真正危害是**单边修改**，
+// 而这个文件已经因为重写定型规则、没跟上 store 那边的升版，误判过一次并指挥人白跑了一轮
+// builder）。
+//
+// 为什么必须是数据末端：踩坑 49 规定重活对备份副本跑，副本的数据末端天生落后墙上时钟。
+// 用墙上时钟的话，落后的那一截里每一天都会被报成"已成熟却查不到基准 ⇒ builder 没跑"，
+// 而实际上是**这份库里根本还没有那几天的数据**。那是副本的形状，不是缺口。
+const DATA_CUTOFF = settleCutoff(db);
 
 const signals = db.prepare("SELECT * FROM shadow_sell_signals ORDER BY decided_at ASC").all();
 if (!signals.length) {
@@ -68,7 +83,7 @@ const priceAt = db.prepare(
 
 function forwardReturn(signal) {
   const target = Date.parse(signal.decided_at) + HORIZON_DAYS * DAY_MS;
-  if (target > Date.now()) return null; // 还没到期
+  if (target > DATA_CUTOFF) return null; // 这份库里还没有到期后的价格
   // 允许 6 小时的容差：同步偶尔会错过整点，卡死在精确时刻会白丢样本
   const row = priceAt.get(
     signal.item_name,
@@ -91,6 +106,16 @@ if (baselineByDay.size === 0) {
   console.log("market_baseline_daily 里还没有 7 天窗口的基准，先跑：node scripts/build-market-baseline.mjs");
   process.exit(0);
 }
+// **覆盖有没有提前截止**要单独报一句，不能只靠下面那个 missingSettled 计数。
+// 2026-08-23 的实例：窗口 7 止于 08-08、数据到 08-22，中间 5 天全落进"未到期"被放行，
+// 1483 条样本被静默剔除而报告照常出数字。**不抛错**（报告不该因此跑不完），
+// 但要把"落后几天 + 怎么修"直接印出来。
+const frontierWarn = assertCoverageFrontier(db, HORIZON_DAYS, { throwOnFail: false });
+if (frontierWarn) {
+  console.log("");
+  console.log(frontierWarn);
+}
+
 // 这份报告里每一个"超额"都是拿基准算的，所以基准是哪一版口径算的必须印在报告里——
 // 半年后拿两份报告对不上时，第一件要排除的就是基准变过（迁移 024）。
 console.log("");
@@ -162,7 +187,7 @@ function marketBaseline(decidedAt) {
     // 这一处本身又是"两边各写一份定义"（HANDOFF 第四节 0.5）：定型规则在 store 里有一份、
     // 这里重写了一份，而 store 那份在 b9645fa10 → b03672dc0 升版时改了，这份没跟上。
     const lastHourMs = dayMs + DAY_MS - HOUR_MS;
-    if (lastHourMs + HORIZON_DAYS * DAY_MS + SETTLE_MS > Date.now()) missingImmature += 1;
+    if (lastHourMs + HORIZON_DAYS * DAY_MS + SETTLE_MS > DATA_CUTOFF) missingImmature += 1;
     else {
       missingSettled += 1;
       missingSettledDays.add(new Date(dayMs).toISOString().slice(0, 10));
@@ -285,7 +310,7 @@ if (decisive.length) {
 //
 // 这跟 2026-08-16 归因查出来的形状是同一个：**问题不是数据不够，是没人在看那一格。**
 // 所以让报告自己指出注意力该放哪，不用人去翻。
-const NOW = Date.now();
+const NOW = DATA_CUTOFF;
 const WEEK_MS = 7 * DAY_MS;
 const cells = [
   ...BANDS.map((b) => ({
