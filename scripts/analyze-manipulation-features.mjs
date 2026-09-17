@@ -177,7 +177,15 @@ for (const item of taggedItems) {
     const retStats = rollingStats(returns, 168, i);
     if (!retStats) continue;
     const volStats = rollingStats(volumes, 168, i);
-    const r24 = returns.slice(Math.max(1, i - 24), i);
+    // **vol24h 的窗口口径：跟生产 `lib/signals/manipulation-score.ts` 对齐，含当前小时。**
+    // 2026-09-17 之前这里取 `[i-24, i)`（**不含**当前小时），生产取 `slice(-24)`（**含**），
+    // 两边错开一格：实测 300/300 样本全不同、最大差 0.00163，而 ramp 锚点是 0.0064 / 0.031
+    // ⇒ 差了阈值量级的 10~25%，**不是浮点噪声**。后果是嫌疑分权重最大那一项的 AUC 0.819
+    // **算的不是生产在算的那个量**。按 HANDOFF 0.9 拍板选 (a)：**改这里去对齐生产，生产不动**
+    // （证据可以重算，但推送已经发出去了不可逆；且「含当前小时」才是实时检测该用的口径）。
+    // ⚠️ **窗口起点必须跟着右移**，否则长度会变成 25 —— 差一格的两种改法里只有这一种是对的。
+    // 对拍测试 `lib/signals/cross-impl-parity.test.ts` 锁住「两边逐位相同」，单边改动会红。
+    const r24 = returns.slice(Math.max(1, i - 23), i + 1);
     const vol24 = Math.sqrt(r24.reduce((s, v) => s + v * v, 0) / r24.length);
     const ma = rollingStats(prices, 168, i);
 

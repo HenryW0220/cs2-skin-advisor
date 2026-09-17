@@ -33,6 +33,12 @@ export function computeManipulationScore(hourlyPrices: number[]): IManipulationS
   }
   if (returns.length < 24) return null;
 
+  // ⚠️ **这一行的 vol24h 跟 `scripts/analyze-manipulation-features.mjs` 差一格，不要单边改。**
+  // 这里 `slice(-24)` **含当前小时**；那边 `returns.slice(Math.max(1, i-24), i)` **不含**。
+  // 下面 ramp 用的 0.0064 / 0.031 两个锚点、以及 AUC 0.819，**都是那边算出来的**，
+  // 所以那两个数没有落在这一行算的量上。实测 300/300 全不同、最大差 0.00163（见下方对拍测试）。
+  // 未修，因为改哪边都会动已发布的数字，要项目所有者拍板 —— HANDOFF 第四节 0.5 与 §0.9。
+  // 对拍与变异测试：`lib/signals/cross-impl-parity.test.ts`，改任一边那组会红。
   const last24 = returns.slice(-24);
   const volatility24h = Math.sqrt(last24.reduce((s, r) => s + r * r, 0) / last24.length);
 
