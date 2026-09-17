@@ -128,6 +128,14 @@ function hourlyPrices(itemName, platform) {
 }
 
 // ---------- 指标：跟 lib/signals/ 逐行等价 ----------
+// **这一节的三个函数各自在 lib/ 里有第二份实现，改任一边都要同步另一边。**
+//   movingAverage -> lib/signals/moving-average.ts（数学等价、浮点不等价：这里滑动窗口累加，
+//                    那边每位重新求和；实测 86.78% 的位置末位不同、最大绝对差 1e-11。
+//                    判成等价是因为这个量只进分档，1e-11 改不了档位归属。）
+//   rsi           -> lib/signals/rsi.ts（逐位相同，已实测）
+//   trendState    -> lib/rules/evaluate.ts 的两个分支
+// 对拍与变异测试在 lib/signals/cross-impl-parity.test.ts —— 那里连这几行源码本身都做了快照，
+// 单边改动会让它红。背景见 HANDOFF 第四节 0.5。
 /** 简单移动平均，口径同 lib/signals/moving-average.ts（前 period-1 个位置是 null） */
 function movingAverage(values, period) {
   const out = new Array(values.length).fill(null);
